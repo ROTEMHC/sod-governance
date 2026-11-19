@@ -6,7 +6,7 @@ import time
 
 import streamlit as st
 
-from board import db, ui
+from board import auth, db, ui
 
 st.set_page_config(page_title="SOD Governance", page_icon="assets/logo.png", layout="wide")
 ui.rtl()
@@ -56,8 +56,19 @@ elif state.user["must_change"] or state.user["password_expired"]:
     st.title("החלפת סיסמה")
 else:
     ui.brand()
+    if "actions" not in state.user:          # משתמש שנכנס לפני שנוספה טעינת ההרשאות
+        state.user = auth.load_session_user(state.user["id"])
+    u = state.user
+    main_pages = [st.Page("app_pages/home.py", title="המשימות שלי", icon=":material/home:", default=True)]
+    # כל מסך מוצג רק למי שיש לו הרשאה מתאימה בטבלת permissions
+    if auth.can(u, "submit_request") or auth.can(u, "handle_requests") or auth.can(u, "view_requested_reports"):
+        main_pages.append(st.Page("app_pages/requests.py", title="בקשות לדוחות", icon=":material/request_quote:"))
+    if auth.can(u, "view_dashboard"):
+        main_pages.append(st.Page("app_pages/dashboard.py", title="דשבורד כספי", icon=":material/monitoring:"))
+    if auth.can(u, "view_audit_log"):
+        main_pages.append(st.Page("app_pages/reports.py", title="דוחות בקרה", icon=":material/summarize:"))
     pages = {
-        "": [st.Page("app_pages/home.py", title="המשימות שלי", icon=":material/home:", default=True)],
+        "": main_pages,
         "החשבון שלי": [st.Page("app_pages/change_password.py", title="החלפת סיסמה",
                                 icon=":material/lock_reset:")],
     }
