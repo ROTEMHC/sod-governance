@@ -2,3 +2,4 @@ streamlit==1.66.0
 pg8000==1.31.6
 pandas==3.0.6
 altair==6.3.0
+anthropic==2.1.0

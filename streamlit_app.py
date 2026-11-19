@@ -59,12 +59,15 @@ else:
     if "actions" not in state.user:          # משתמש שנכנס לפני שנוספה טעינת ההרשאות
         state.user = auth.load_session_user(state.user["id"])
     u = state.user
-    main_pages = [st.Page("app_pages/home.py", title="המשימות שלי", icon=":material/home:", default=True)]
+    main_pages = [st.Page("app_pages/home.py", title="המשימות שלי", icon=":material/home:", default=True),
+                  st.Page("app_pages/calendar.py", title="היומן שלי", icon=":material/calendar_month:"),
+                  st.Page("app_pages/meetings.py", title="ישיבות ופרוטוקולים", icon=":material/event_note:")]
     # כל מסך מוצג רק למי שיש לו הרשאה מתאימה בטבלת permissions
     if auth.can(u, "submit_request") or auth.can(u, "handle_requests") or auth.can(u, "view_requested_reports"):
         main_pages.append(st.Page("app_pages/requests.py", title="בקשות לדוחות", icon=":material/request_quote:"))
     if auth.can(u, "view_dashboard"):
         main_pages.append(st.Page("app_pages/dashboard.py", title="דשבורד כספי", icon=":material/monitoring:"))
+        main_pages.append(st.Page("app_pages/agent.py", title="היועץ של סוד (AI)", icon=":material/psychology:"))
     if auth.can(u, "view_audit_log"):
         main_pages.append(st.Page("app_pages/reports.py", title="דוחות בקרה", icon=":material/summarize:"))
     pages = {
@@ -73,9 +76,7 @@ else:
                                 icon=":material/lock_reset:")],
     }
     page = st.navigation(pages, position="sidebar")
-    with st.sidebar:
-        st.caption(f"מחובר/ת: **{state.user['name']}**  \n{ui.ROLE_HE[state.user['role']]}")
-        st.button("יציאה", on_click=logout, icon=":material/logout:", width="stretch")
+    ui.topbar(state.user, logout)
     st.title(page.title)
 
 page.run()
