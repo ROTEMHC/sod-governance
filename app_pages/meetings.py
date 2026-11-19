@@ -1,0 +1,271 @@
+# מסך 3: ישיבות (UC-08, UC-10, UC-12, UC-13). לכל ישיבה: סדר יום, מסמכים, משתתפים, פרוטוקול ונושאים פתוחים.
+# כל משתמש רואה רק ישיבות של פורום שהוא חבר בו או שהוזמן אליהן. יו"ר, מזכירות ומנהל מערכות רואים את כולן.
+from datetime import datetime, timezone
+
+import streamlit as st
+
+from board import db, ui
+
+user = st.session_state.user
+uid, role = user["id"], user["role"]
+sees_all = role in ("admin", "secretary", "chair")
+
+DOC_TYPE_HE = {"meeting_material": "חומר ישיבה", "conflict_declaration": "טופס הצהרה חתום",
+               "requested_report": "דוח שהתבקש", "absence_proof": "אסמכתה להיעדרות",
+               "field_check": "ממצאי בדיקת שטח"}
+CLASS_HE = {"internal": "פנימי", "confidential": "סודי", "secret": "סודי ביותר"}
+MINUTES_HE = {"none": "טרם נכתב", "draft": "טיוטה", "circulated": "הופץ להערות", "approved": "אושר ונחתם"}
+DEC_HE = {"open": "פתוחה", "in_progress": "בביצוע", "done": "בוצעה"}
+REQ_HE = {"open": "פתוחה", "in_progress": "בטיפול", "fulfilled": "נשלחה", "rejected": "נדחתה"}
+
+# ---------------------------------------------------------------- בחירת ישיבה
+when = st.segmented_control("ישיבות", ["קרובות", "שהתקיימו", "כולן"], default="קרובות",
+                            required=True, label_visibility="collapsed")
+time_filter = {"קרובות": "AND m.meeting_at >= now() AND m.status IN ('proposed','scheduled')",
+               "שהתקיימו": "AND (m.meeting_at < now() OR m.status IN ('held','closed'))",
+               "כולן": ""}[when]
+access = "" if sees_all else ("AND m.id IN (SELECT meeting_id FROM v_meeting_participants WHERE user_id = :u)")
+meetings = db.query(
+    "SELECT m.id, m.title, m.meeting_at, m.status, m.mode, m.location, m.minutes_body, m.minutes_status, "
+    "m.minutes_approved_at, ap.name AS approved_by, m.materials_distributed_at, f.name AS forum "
+    "FROM meetings m JOIN forums f ON f.id = m.forum_id LEFT JOIN users ap ON ap.id = m.minutes_approved_by "
+    f"WHERE m.status <> 'cancelled' {time_filter} {access} "
+    "ORDER BY m.meeting_at " + ("DESC" if when == "שהתקיימו" else ""), u=uid)
+
+if not meetings:
+    st.info("אין ישיבות להצגה.", icon=":material/event_busy:")
+    st.stop()
+
+meeting_id = st.selectbox(
+    "בחירת ישיבה", [m["id"] for m in meetings],
+    format_func=lambda i: next(f"{ui.fmt_date(m['meeting_at'])} · {m['forum']}: {m['title']}"
+                               for m in meetings if m["id"] == i))
+m = next(x for x in meetings if x["id"] == meeting_id)
+
+# ---------------------------------------------------------------- כותרת הישיבה
+with ui.card("meeting-head", "navy"):
+    st.markdown(f"### {m['forum']}: {m['title']}")
+    ui.table([{"when": ui.fmt_date(m["meeting_at"]), "status": ui.STATUS_HE[m["status"]],
+               "mode": ui.MODE_HE[m["mode"]], "where": m["location"] or "",
+               "materials": "הופץ" if m["materials_distributed_at"] else "טרם הופץ",
+               "minutes": MINUTES_HE.get(m["minutes_status"], "")}],
+             {"when": "מועד", "status": "מצב", "mode": "אופן", "where": "מקום",
+              "materials": "חומר", "minutes": "פרוטוקול"})
+
+tab_agenda, tab_docs, tab_people, tab_minutes, tab_open = ui.side_tabs(
+    [":material/list_alt: סדר יום", ":material/folder: מסמכים", ":material/group: משתתפים",
+     ":material/description: פרוטוקול", ":material/pending_actions: נושאים פתוחים"], key="meeting_tab")
+
+# ================================================================ סדר יום ותבנית החובה
+with tab_agenda:
+    items = db.query(
+        "SELECT ai.*, u.name AS presenter, "
+        "(SELECT count(*) FROM item_responses r WHERE r.agenda_item_id = ai.id AND r.has_conflict) AS conflicts, "
+        "(SELECT count(*) FROM item_responses r WHERE r.agenda_item_id = ai.id AND r.vote = 'for') AS v_for, "
+        "(SELECT count(*) FROM item_responses r WHERE r.agenda_item_id = ai.id AND r.vote = 'against') AS v_against, "
+        "(SELECT count(*) FROM item_responses r WHERE r.agenda_item_id = ai.id AND r.vote = 'abstain') AS v_abstain "
+        "FROM agenda_items ai LEFT JOIN users u ON u.id = ai.presenter_id "
+        "WHERE ai.meeting_id = :m ORDER BY ai.position", m=meeting_id)
+    if not items:
+        st.caption("עדיין אין נושאים בסדר היום.")
+    REQUIRED = [("decision_required", "ההחלטה הנדרשת"), ("alternatives", "חלופות"),
+                ("no_go_option", "אפשרות לא לבצע"), ("risks", "סיכונים"), ("negative_scenario", "תרחיש שלילי")]
+    for it in items:
+        missing = [label for col, label in REQUIRED if not it[col]] if it["item_type"] == "decision" else []
+        color = "red" if len(missing) >= 3 else ("gold" if missing else "teal")
+        with ui.card(f"item-{it['id']}", color):
+            kind = {"decision": "להחלטה", "discussion": "לדיון", "info": "לעדכון"}[it["item_type"]]
+            st.markdown(f"**{it['position']}. {it['title']}** · {kind} · מציג/ה: {it['presenter'] or '—'}")
+            if it["summary"]:
+                st.write(it["summary"])
+            if it["item_type"] == "decision":
+                with st.container(horizontal=True):
+                    for col, label in REQUIRED:
+                        st.badge(label, icon=":material/check:" if it[col] else ":material/close:",
+                                 color="green" if it[col] else "red")
+                if missing:
+                    st.caption(f"חסרים רכיבי חובה: {', '.join(missing)}." +
+                               (" הנושא מסומן כחסר, כי חסרים 3 רכיבים או יותר." if len(missing) >= 3 else ""))
+                with st.expander("פירוט תבנית החובה"):
+                    for col, label in REQUIRED:
+                        st.markdown(f"**{label}:** {it[col] or ':red[חסר]'}")
+                if it["non_delegable"]:
+                    st.caption(":material/gavel: סמכות שאינה ניתנת להאצלה לוועדה.")
+            with st.container(horizontal=True):
+                if it["conflicts"]:
+                    st.badge(f"עניין אישי: {it['conflicts']}", icon=":material/warning:", color="orange")
+                if it["v_for"] or it["v_against"] or it["v_abstain"]:
+                    st.badge(f"בעד {it['v_for']} · נגד {it['v_against']} · נמנע {it['v_abstain']}",
+                             icon=":material/how_to_vote:", color="blue")
+
+# ================================================================ לשונית המסמכים
+with tab_docs:
+    docs = db.query(
+        "SELECT d.id, d.doc_type, d.filename, d.classification, d.uploaded_at, d.content_sha256, "
+        "u.name AS uploader, u.job_title, d.uploaded_by, ai.position, ai.title AS item_title "
+        "FROM documents d LEFT JOIN users u ON u.id = d.uploaded_by "
+        "LEFT JOIN agenda_items ai ON ai.id = d.agenda_item_id "
+        "WHERE d.meeting_id = :m ORDER BY d.doc_type, ai.position NULLS FIRST, d.uploaded_at", m=meeting_id)
+
+    def visible(d) -> bool:
+        if d["doc_type"] == "conflict_declaration":      # טופס חתום: החותם, והגורמים שמנהלים את הישיבה
+            return d["uploaded_by"] == uid or sees_all
+        if d["doc_type"] == "absence_proof":             # אסמכתה חסויה
+            return d["uploaded_by"] == uid or role in ("secretary", "chair")
+        return True
+
+    docs = [d for d in docs if visible(d)]
+    if not docs:
+        st.caption("אין מסמכים לישיבה זו.")
+    groups = [("meeting_material", "חומרי הישיבה"), ("requested_report", "דוחות שהתבקשו (גלויים לכל חברי הפורום)"),
+              ("field_check", "ממצאי בדיקות שטח"), ("conflict_declaration", "טפסי הצהרה חתומים"),
+              ("absence_proof", "אסמכתאות היעדרות (חסוי)")]
+    for dtype, title in groups:
+        rows = [d for d in docs if d["doc_type"] == dtype]
+        if not rows:
+            continue
+        with ui.card(f"docs-{dtype}", "navy" if dtype == "meeting_material" else "teal"):
+            st.markdown(f"**{title}**")
+            ui.table([{"file": d["filename"],
+                       "item": f"{d['position']}. {d['item_title']}" if d["position"] else "כללי",
+                       "by": f"{d['uploader']}" + (f" ({d['job_title']})" if d["job_title"] else ""),
+                       "when": ui.fmt_date(d["uploaded_at"]), "cls": CLASS_HE.get(d["classification"], ""),
+                       "seal": {"text": "חותמת שלמות", "tip": f"SHA-256: {d['content_sha256']}"} if d["content_sha256"] else ""}
+                      for d in rows],
+                     {"file": "מסמך", "item": "נושא", "by": "הועלה בידי", "when": "מועד", "cls": "סיווג", "seal": ""})
+    st.caption("המסמכים מוצגים בתוך המערכת בלבד, עם סימן מים, וכל צפייה נרשמת ביומן הפעולות.")
+
+# ================================================================ משתתפים
+with tab_people:
+    people = db.query(
+        "SELECT p.user_id, p.user_name, p.role, p.is_forum_member, p.rsvp, p.attended, p.declaration_signed_at, "
+        "a.declaration_sent_at, a.has_personal_interest, a.absence_reason, a.absence_justified "
+        "FROM v_meeting_participants p "
+        "LEFT JOIN attendance a ON a.meeting_id = p.meeting_id AND a.user_id = p.user_id "
+        "WHERE p.meeting_id = :m ORDER BY p.is_forum_member DESC, p.user_name", m=meeting_id)
+    REASON_HE = {"bereavement": "אבל", "illness": "מחלה", "emergency": "חירום",
+                 "reserve_duty": "מילואים", "other": "אחר", None: ""}
+    ATT_HE = {"physical": "נכח/ה", "remote": "מרחוק", "absent": "נעדר/ה", None: ""}
+    rows = []
+    for p in people:
+        decl = ("נחתם" if p["declaration_signed_at"] else
+                "ממתין לחתימה" if p["declaration_sent_at"] else "טרם נשלח")
+        absence = REASON_HE[p["absence_reason"]]
+        if p["absence_reason"]:
+            absence += " · " + ("ממתין להחלטת היו\"ר" if p["absence_justified"] is None
+                                else "מוצדקת" if p["absence_justified"] else "לא מוצדקת")
+        rows.append({"name": p["user_name"], "kind": "חבר/ת פורום" if p["is_forum_member"] else "מוזמן/ת מההנהלה",
+                     "rsvp": ui.RSVP_HE.get(p["rsvp"]), "attended": ATT_HE.get(p["attended"], ""),
+                     "decl": decl, "interest": "יש" if p["has_personal_interest"] else "",
+                     "absence": absence})
+    with ui.card("people", "navy"):
+        ui.table(rows, {"name": "שם", "kind": "סוג", "rsvp": "אישור הגעה", "attended": "נוכחות",
+                        "decl": "טופס הצהרה", "interest": "עניין אישי", "absence": "היעדרות"})
+
+    # ---- אישור נוכחות בפועל: המזכירות או היו"ר מסמנים מי נכח. רק היו"ר קובע אם היעדרות מוצדקת.
+    started = ui.local(m["meeting_at"]) <= ui.local(datetime.now(timezone.utc))
+    if role in ("chair", "secretary") and (started or m["status"] in ("held", "closed")):
+        with ui.card("confirm-attendance", "gold"):
+            st.markdown("**אישור נוכחות בפועל**")
+            st.caption("ברירת המחדל לפי אישור ההגעה ולפי מי שהצטרף מרחוק בקוד אימות. "
+                       + ("כיו\"ר, את/ה גם קובע/ת אם היעדרות מוצדקת." if role == "chair"
+                          else "ההחלטה אם היעדרות מוצדקת שמורה ליו\"ר."))
+            ATT = {"physical": "נכח/ה", "remote": "מרחוק", "absent": "נעדר/ה"}
+            with st.form(f"attendance_{meeting_id}", border=False):
+                choices = {}
+                for p in people:
+                    guess = p["attended"] or {"yes": "physical", "remote": "remote", "no": "absent"}.get(p["rsvp"])
+                    c1, c2, c3 = st.columns([2, 3, 3], vertical_alignment="center")
+                    c1.markdown(f"**{p['user_name']}**" + ("" if p["is_forum_member"] else "  \n:gray[מוזמן/ת]"))
+                    att = c2.segmented_control("נוכחות", list(ATT), format_func=ATT.get, default=guess,
+                                               key=f"att_{meeting_id}_{p['user_id']}", label_visibility="collapsed")
+                    just = None
+                    if role == "chair":
+                        label = f"היעדרות ({REASON_HE[p['absence_reason']] or 'ללא סיבה'})"
+                        current = {True: "מוצדקת", False: "לא מוצדקת"}.get(p["absence_justified"])
+                        just = c3.segmented_control(label, ["מוצדקת", "לא מוצדקת"], default=current,
+                                                    key=f"just_{meeting_id}_{p['user_id']}")
+                    choices[p["user_id"]] = (att, just)
+                if st.form_submit_button("שמירת הנוכחות", type="primary", icon=":material/how_to_reg:"):
+                    for pid, (att, just) in choices.items():
+                        if att:
+                            db.execute("INSERT INTO attendance (meeting_id, user_id, attended) VALUES (:m, :u, :a) "
+                                       "ON CONFLICT (meeting_id, user_id) DO UPDATE SET attended = EXCLUDED.attended",
+                                       m=meeting_id, u=pid, a=att)
+                        if role == "chair" and att == "absent" and just:
+                            db.execute("UPDATE attendance SET absence_justified = :j, absence_reviewed_by = :r "
+                                       "WHERE meeting_id = :m AND user_id = :u",
+                                       j=just == "מוצדקת", r=uid, m=meeting_id, u=pid)
+                    db.audit(uid, "attendance_confirmed", "meeting", meeting_id,
+                             ", ".join(f"{pid}:{a or '-'}" for pid, (a, _) in choices.items()))
+                    st.toast("הנוכחות נשמרה.", icon=":material/check_circle:")
+                    st.rerun()
+
+# ================================================================ פרוטוקול
+with tab_minutes:
+    status = m["minutes_status"]
+    with ui.card("minutes", "gold" if status != "approved" else "teal"):
+        st.markdown(f"**מצב הפרוטוקול:** {MINUTES_HE.get(status, '')}")
+        if status == "approved":
+            st.caption(f"אושר ונחתם בידי {m['approved_by']} · {ui.fmt_date(m['minutes_approved_at'])}. "
+                       "פרוטוקול חתום משמש ראיה לכאורה למה שנאמר בישיבה, ונשמר לפחות 7 שנים.")
+        if m["minutes_body"]:
+            st.markdown(m["minutes_body"])
+        else:
+            st.caption("הפרוטוקול ייכתב בזמן הישיבה או אחריה.")
+    decisions = db.query(
+        "SELECT ai.position, ai.title AS item, d.text, u.name AS owner, d.due_date, d.status, "
+        "d.status <> 'done' AND d.due_date < current_date AS overdue "
+        "FROM decisions d JOIN agenda_items ai ON ai.id = d.agenda_item_id LEFT JOIN users u ON u.id = d.owner_id "
+        "WHERE ai.meeting_id = :m ORDER BY ai.position", m=meeting_id)
+    if decisions:
+        with ui.card("minutes-decisions", "navy"):
+            st.markdown("**החלטות שהתקבלו בישיבה**")
+            ui.table([{"item": f"{d['position']}. {d['item']}", "text": d["text"], "owner": d["owner"] or "",
+                       "due": ui.fmt_date(d["due_date"]),
+                       "status": "באיחור" if d["overdue"] else DEC_HE[d["status"]]} for d in decisions],
+                     {"item": "נושא", "text": "החלטה", "owner": "אחראי/ת", "due": "מועד", "status": "מצב"})
+    reservations = db.query(
+        "SELECT ai.position, ai.title, u.name, r.reservation FROM item_responses r "
+        "JOIN agenda_items ai ON ai.id = r.agenda_item_id JOIN users u ON u.id = r.user_id "
+        "WHERE ai.meeting_id = :m AND r.reservation IS NOT NULL ORDER BY ai.position", m=meeting_id)
+    if reservations:
+        with ui.card("reservations", "gold"):
+            st.markdown("**הסתייגויות שנרשמו**")
+            for r in reservations:
+                st.markdown(f"- **{r['name']}** (נושא {r['position']}, {r['title']}): {r['reservation']}")
+
+# ================================================================ נושאים פתוחים
+with tab_open:
+    st.caption("כל מה שעדיין לא נסגר מהישיבה הזו: החלטות שטרם בוצעו, בקשות לדוחות שטרם נענו, וטפסים שטרם נחתמו.")
+    open_dec = [d for d in decisions if d["status"] != "done"] if decisions else []
+    open_req = db.query(
+        "SELECT r.title, r.period, u.name AS requester, r.due_date, r.status, r.due_date < current_date AS overdue "
+        "FROM document_requests r JOIN users u ON u.id = r.requested_by "
+        "WHERE r.meeting_id = :m AND r.status IN ('open','in_progress') ORDER BY r.due_date", m=meeting_id)
+    unsigned = [p for p in people if p["declaration_sent_at"] and not p["declaration_signed_at"]]
+    with st.container(horizontal=True):
+        ui.kpi("open-dec", "החלטות פתוחות", len(open_dec), ":material/task_alt:",
+               alert=any(d["overdue"] for d in open_dec))
+        ui.kpi("open-req", "בקשות לדוחות פתוחות", len(open_req), ":material/request_quote:",
+               alert=any(r["overdue"] for r in open_req))
+        ui.kpi("open-sign", "טפסים שטרם נחתמו", len(unsigned), ":material/draw:", alert=bool(unsigned))
+    if open_dec:
+        with ui.card("open-decisions", "red" if any(d["overdue"] for d in open_dec) else "teal"):
+            st.markdown("**החלטות פתוחות**")
+            ui.table([{"text": d["text"], "owner": d["owner"] or "", "due": ui.fmt_date(d["due_date"]),
+                       "status": "באיחור" if d["overdue"] else DEC_HE[d["status"]]} for d in open_dec],
+                     {"text": "החלטה", "owner": "אחראי/ת", "due": "מועד", "status": "מצב"})
+    if open_req:
+        with ui.card("open-requests"):
+            st.markdown("**בקשות לדוחות שטרם נענו**")
+            ui.table([{"title": r["title"], "period": r["period"] or "", "who": r["requester"],
+                       "due": ui.fmt_date(r["due_date"]),
+                       "status": "באיחור" if r["overdue"] else REQ_HE[r["status"]]} for r in open_req],
+                     {"title": "דוח", "period": "תקופה", "who": "מבקש/ת", "due": "מועד מענה", "status": "מצב"})
+    if unsigned:
+        with ui.card("open-unsigned", "red"):
+            st.markdown("**טרם חתמו על טופס ההצהרה**")
+            st.write(", ".join(p["user_name"] for p in unsigned) + ". הם יקבלו תזכורת כל יום, ולא יוכלו להצביע עד שיחתמו.")
+    if not (open_dec or open_req or unsigned):
+        st.success("אין נושאים פתוחים בישיבה זו.", icon=":material/check_circle:")

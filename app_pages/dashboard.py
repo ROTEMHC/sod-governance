@@ -20,6 +20,75 @@ with st.container(horizontal=True):
             st.metric(fin.LABELS[key], f"{fin.v(key):,.0f}", f"{fin.growth(key):+.1%}", icon=icon,
                       help=f"**{note[0]}:** {note[1]}" if note else None)
 
+# ---------------------------------------------------------------- מגמה רבעונית: עונתיות או מגמה מתמשכת?
+st.subheader(":material/show_chart: מגמה לפי רבעונים: עלייה עונתית או מגמה מתמשכת?")
+with ui.card("quarters", "navy"):
+    Q = fin.QUARTERS
+    names = list(Q)
+    q_sel = st.segmented_control("רבעון לניתוח", names, default=names[-1], required=True, key="q_sel")
+    k_sel = names.index(q_sel)
+    METRICS = {"sales": "מכירות", "gross_profit": "רווח גולמי", "opex": "הוצאות מכירה והנהלה",
+               "operating_profit": "רווח תפעולי", "finance_net": "הוצאות מימון", "net_profit": "רווח נקי"}
+
+    def val(d, k):
+        return d["selling"] + d["admin"] if k == "opex" else d[k]
+
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown("**מכירות ורווח גולמי לפי רבעון**")
+        rows = [{"רבעון": q, "מדד": METRICS[k], "סכום": val(Q[q], k)} for q in names for k in ("sales", "gross_profit")]
+        rows += [{"רבעון": "Q4 2024", "מדד": METRICS[k], "סכום": val(fin.Q4_2024, k)} for k in ("sales", "gross_profit")]
+        order = ["Q4 2024"] + names
+        line = (alt.Chart(pd.DataFrame(rows)).mark_line(point=alt.OverlayMarkDef(size=70), strokeWidth=3)
+                .encode(x=alt.X("רבעון:N", sort=order, title=None, axis=alt.Axis(labelAngle=0)),
+                        y=alt.Y("סכום:Q", title="מיליוני ש\"ח"),
+                        color=alt.Color("מדד:N", scale=alt.Scale(range=[ui.NAVY, ui.TEAL]),
+                                        legend=alt.Legend(orient="top", title=None)),
+                        tooltip=["רבעון", "מדד", alt.Tooltip("סכום:Q", format=",.1f")])
+                .properties(height=280))
+        st.altair_chart(line, alt="מכירות ורווח גולמי לפי רבעון")
+    with c2:
+        st.markdown(f"**עלה או ירד: {q_sel} מול " + (f"{names[k_sel - 1]}**" if k_sel else "Q4 2024**"))
+        prev = Q[names[k_sel - 1]] if k_sel else fin.Q4_2024
+        cur = Q[q_sel]
+        rows = []
+        for k, label in METRICS.items():
+            ch = val(cur, k) - val(prev, k)
+            good = ch < 0 if k in ("opex", "finance_net") else ch > 0     # עלייה בהוצאה = רע
+            rows.append({"מדד": label, "שינוי": ch, "כיוון": "לטובה" if good else "לרעה"})
+        bars = (alt.Chart(pd.DataFrame(rows)).mark_bar(cornerRadiusEnd=4)
+                .encode(y=alt.Y("מדד:N", sort=None, title=None),
+                        x=alt.X("שינוי:Q", title="שינוי במיליוני ש\"ח"),
+                        color=alt.Color("כיוון:N", scale=alt.Scale(domain=["לטובה", "לרעה"], range=[ui.TEAL, "#C0392B"]),
+                                        legend=alt.Legend(orient="top", title=None)),
+                        tooltip=["מדד", alt.Tooltip("שינוי:Q", format="+,.1f")])
+                .properties(height=280))
+        st.altair_chart(bars, alt="שינוי בכל מדד מול הרבעון הקודם")
+
+    # השוואה לרבעון הקודם מול השוואה לרבעון המקביל אשתקד: זה מה שמפריד בין עונתיות למגמה
+    same_q = fin.Q4_2024 if q_sel == "Q4 2025" else None
+    table_rows = []
+    for k, label in METRICS.items():
+        c, p = val(cur, k), val(prev, k)
+        row = {"m": label, "cur": f"{c:,.1f}", "pct": f"{c / cur['sales']:.2%}",
+               "qoq": f"{c / p - 1:+.1%}" if p else ""}
+        if same_q:
+            row["yoy"] = f"{c / val(same_q, k) - 1:+.1%}"
+        table_rows.append(row)
+    ui.table(table_rows, {"m": "מדד", "cur": q_sel, "pct": "% מהמכירות", "qoq": "מול הרבעון הקודם",
+                          "yoy": "מול הרבעון המקביל אשתקד"})
+    st.caption("**איך מזהים עונתיות:** שינוי מול הרבעון הקודם מושפע מהעונה (למשל חגים, או סופגניות בחנוכה). "
+               "שינוי מול **אותו רבעון בשנה הקודמת** מנטרל את העונה: אם גם שם יש עלייה, זו מגמה מתמשכת. "
+               + ("" if same_q else "להשוואה לרבעון המקביל ב-2024 יש להוסיף את הדוח התקופתי לשנת 2024."))
+    if q_sel in fin.Q_EXPLAIN:
+        st.markdown("**:material/psychology: מה גרם לשינוי (לפי הסברי הדירקטוריון)**")
+        for line in fin.Q_EXPLAIN[q_sel]:
+            st.markdown(f"- {line}")
+    else:
+        st.caption("הסברי ההנהלה לרבעון זה מופיעים בדוח הרבעוני. אפשר לשאול עליהם את היועץ של סוד.")
+    st.caption(":material/info: תזרים מזומנים רבעוני ונתונים חודשיים או לפי קטגוריה (למשל מאפים) אינם מפורסמים "
+               "בדוחות הציבוריים. במערכת אצל הלקוח הם נמשכים ממערכת ה-ERP (פריוריטי), לפי הרשאה.")
+
 # ---------------------------------------------------------------- רמזור
 LEVEL = {"red": ("card-red", ":material/error:", "אדום"), "yellow": ("card-gold", ":material/warning:", "צהוב"),
          "green": ("card", ":material/check_circle:", "ירוק")}

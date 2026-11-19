@@ -8,9 +8,7 @@ STATUS_DEC = {"open": "פתוחה", "in_progress": "בביצוע", "done": "בו
 REASON_HE = {"bereavement": "אבל", "illness": "מחלה", "emergency": "חירום",
              "reserve_duty": "מילואים", "other": "אחר", None: ""}
 
-view = st.segmented_control(
-    "דוח", ["מעקב החלטות", "היעדרויות", "תמונת מצב ישיבות"], default="מעקב החלטות",
-    required=True, label_visibility="collapsed")
+view = ui.side_menu(["מעקב החלטות", "היעדרויות", "תמונת מצב ישיבות"], key="reports_view")
 
 # ================================================================ מעקב החלטות
 if view == "מעקב החלטות":

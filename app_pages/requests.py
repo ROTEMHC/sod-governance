@@ -13,6 +13,13 @@ can_submit = auth.can(user, "submit_request")
 can_handle = auth.can(user, "handle_requests")
 can_view_all = auth.can(user, "view_requested_reports") and user["role"] in ("admin", "cfo", "chair", "management")
 
+# דוחות שדירקטורים מבקשים בדרך כלל. אפשר גם להקליד דוח אחר.
+REPORT_TYPES = [
+    "דוח גיול לקוחות", "דוח הרכב מלאי וגיול מלאי", "דוח קניות לפי ספק", "תחזית תזרים מזומנים",
+    "דוח רווחיות לפי סניף", "דוח רווחיות לפי מגזר", "פירוט הוצאות מכירה ושיווק",
+    "פירוט הוצאות מימון", "דוח שכר ומצבת עובדים", "דוח חובות מסופקים", "תקציב מול ביצוע",
+]
+
 STATUS_HE = {"open": "פתוחה", "in_progress": "בטיפול", "fulfilled": "נשלחה", "rejected": "נדחתה"}
 SOURCE_HE = {"priority": "Priority", "upload": "העלאה ידנית", None: ""}
 
@@ -47,7 +54,7 @@ if can_handle:
 tabs.append("דוחות שהתבקשו")
 if can_submit:
     tabs.append("הבקשות שלי")
-view = st.segmented_control("תצוגה", tabs, default=tabs[0], required=True, label_visibility="collapsed")
+view = ui.side_menu(tabs, key="requests_view")
 
 # ================================================================ בקשה חדשה (UC-23)
 if view == "בקשה חדשה":
@@ -67,9 +74,32 @@ if view == "בקשה חדשה":
         st.markdown("**:material/add_circle: בקשה לדוח או למסמך שאינו זמין לך**")
         st.caption(f"הבקשה תנותב ל{cfo['name']} (סמנכ\"ל הכספים), עם מועד מענה {ui.fmt_date(due)} "
                    "(5 ימי עבודה). הדוח שיישלח יוצג לכל חברי הפורום של הישיבה.")
+        if "request_done" in st.session_state:   # אחרי שליחה: הודעת אישור וניקוי שם הדוח
+            st.success(st.session_state.pop("request_done"), icon=":material/check_circle:")
+            st.session_state.pop("req_title", None)
+        # שם הדוח וסוג התקופה מחוץ לטופס, כדי ששדות התקופה יתחלפו מיד לפי הבחירה
+        title = st.selectbox(
+            "איזה דוח או מסמך?", REPORT_TYPES, index=None, accept_new_options=True, key="req_title",
+            placeholder="בחירה מהרשימה, או הקלדת שם של דוח אחר")
+        period_kind = st.segmented_control("לאיזו תקופה?", ["רבעון", "שנה", "טווח תאריכים"],
+                                           default="רבעון", required=True)
+        today = date.today()
+        years = list(range(today.year, today.year - 5, -1))
         with st.form("new_request", clear_on_submit=True):
-            title = st.text_input("איזה דוח או מסמך?", placeholder="למשל: דוח גיול לקוחות")
-            period = st.text_input("לאיזו תקופה?", placeholder="למשל: רבעון 3, 2026")
+            if period_kind == "רבעון":
+                q_col, y_col = st.columns(2)
+                quarter = q_col.selectbox("רבעון", [1, 2, 3, 4], index=(today.month - 1) // 3,
+                                          format_func=lambda q: f"רבעון {q}")
+                year = y_col.selectbox("שנה", years)
+                period = f"רבעון {quarter}, {year}"
+            elif period_kind == "שנה":
+                year = st.selectbox("שנה", years)
+                period = f"שנת {year}"
+            else:
+                rng = st.date_input("מתאריך עד תאריך", value=(date(today.year, 1, 1), today),
+                                    max_value=today, format="DD/MM/YYYY")
+                period = (f"{rng[0]:%d/%m/%Y}–{rng[1]:%d/%m/%Y}"
+                          if isinstance(rng, tuple) and len(rng) == 2 else "")
             meeting_id = st.selectbox(
                 "לקראת איזו ישיבה?", [None] + [m["id"] for m in meetings],
                 format_func=lambda i: "לא קשור לישיבה מסוימת" if i is None else next(
@@ -78,18 +108,30 @@ if view == "בקשה חדשה":
                                   placeholder="למשל: הלקוחות גדלו מהר מהמכירות, ונדרש לבדוק את איכות הגבייה לפני אישור הדוחות.")
             sent = st.form_submit_button("שליחת הבקשה", type="primary", icon=":material/send:")
         if sent:
-            if not title.strip() or not reason.strip():
-                st.error("חובה למלא את שם הדוח ואת הנימוק.")
+            title = (title or "").strip()
+            if not title or not reason.strip():
+                st.error("חובה לבחור דוח ולמלא נימוק.")
+            elif not period:
+                st.error("יש לבחור תאריך התחלה ותאריך סיום.")
             else:
                 row = db.one("INSERT INTO document_requests (requested_by, assigned_to, title, period, reason, due_date, meeting_id) "
                              "VALUES (:by, :to, :t, :p, :r, :d, :m) RETURNING id",
-                             by=uid, to=cfo["id"], t=title.strip(), p=period.strip() or None,
+                             by=uid, to=cfo["id"], t=title, p=period,
                              r=reason.strip(), d=due, m=meeting_id)
-                db.audit(uid, "request_submitted", "document_request", row["id"], title.strip())
-                notify(cfo["id"], "request_new", "info", f"בקשה חדשה מ{user['name']}: \"{title.strip()}\". מועד מענה: {ui.fmt_date(due)}.",
+                db.audit(uid, "request_submitted", "document_request", row["id"], f"{title} ({period})")
+                notify(cfo["id"], "request_new", "info", f"בקשה חדשה מ{user['name']}: \"{title}\" ({period}). מועד מענה: {ui.fmt_date(due)}.",
                        "document_request", row["id"], f"request_new:{row['id']}:{cfo['id']}")
-                st.success(f"הבקשה נשלחה ל{cfo['name']}. אם לא תיענה עד המועד, המנכ\"ל יקבל התראה, ואחריו היו\"ר.",
-                           icon=":material/check_circle:")
+                # שרשרת ההסלמה נכתבת לפי מי שביקש: לא אומרים ליו"ר שהבקשה "תעבור ליו"ר"
+                is_ceo = user["role"] == "management" and auth.can(user, "submit_request")
+                if user["role"] == "chair":
+                    chain = "המנכ\"ל יקבל התראה, ואחריו תקבל/י התראה גם את/ה, כיו\"ר"
+                elif is_ceo:
+                    chain = "תקבל/י התראה, ואחרייך גם היו\"ר"
+                else:
+                    chain = "המנכ\"ל יקבל התראה, ואחריו היו\"ר"
+                st.session_state.request_done = (f"הבקשה \"{title}\" ({period}) נשלחה ל{cfo['name']}. "
+                                                 f"אם לא תיענה עד {ui.fmt_date(due)}, {chain}.")
+                st.rerun()
 
 # ================================================================ תור הטיפול (UC-24)
 elif view == "תור הטיפול שלי":

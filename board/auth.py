@@ -112,7 +112,8 @@ def send_otp(user_id: int, channel: str) -> str:
     return code
 
 
-def verify_otp(user_id: int, code: str) -> tuple[bool, str | None]:
+def verify_otp(user_id: int, code: str, purpose: str = "login_success") -> tuple[bool, str | None]:
+    """purpose: הפעולה שנרשמת ביומן אחרי אימות מוצלח (כניסה למערכת, או חתימה על טופס)."""
     u = db.one("SELECT otp_hash, otp_attempts, otp_expires_at < now() AS expired "
                "FROM users WHERE id = :id", id=user_id)
     if not u or not u["otp_hash"]:
@@ -123,7 +124,7 @@ def verify_otp(user_id: int, code: str) -> tuple[bool, str | None]:
     if verify_secret(code.strip(), u["otp_hash"]):
         _clear_otp(user_id)                      # קוד חד-פעמי: נמחק מיד אחרי השימוש
         db.execute("UPDATE users SET failed_attempts = 0, locked_until = NULL WHERE id = :id", id=user_id)
-        db.audit(user_id, "login_success", "user", user_id, None)
+        db.audit(user_id, purpose, "user", user_id, None)
         return True, None
     attempts = u["otp_attempts"] + 1
     if attempts >= 3:
