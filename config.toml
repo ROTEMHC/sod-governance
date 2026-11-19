@@ -1,0 +1,23 @@
+# צבעי המערכת לפי הלוגו של SOD Governance: כחול כהה, טורקיז וזהב
+[theme]
+base = "light"
+primaryColor = "#14857A"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F2F5F9"
+textColor = "#1F2A44"
+linkColor = "#14857A"
+borderColor = "#D6DDE8"
+baseRadius = "medium"
+# הזהב של הלוגו (משמש לסלוגן "בסוד ישרים ועדה")
+orangeColor = "#C9A227"
+orangeTextColor = "#B8901E"
+
+[theme.sidebar]
+backgroundColor = "#EEF2F8"
+textColor = "#1F3864"
+
+[client]
+toolbarMode = "minimal"
+
+[server]
+runOnSave = true
