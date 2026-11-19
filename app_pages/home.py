@@ -56,42 +56,32 @@ else:
     requests_label = "הבקשות שלי לדוחות"
 
 # ---------------------------------------------------------------- כותרת ומדדים
+role_he = ui.ROLE_HE[role]
+job = user["job_title"]
 st.subheader(f"שלום, {user['name']}")
-st.caption(f"{user['job_title'] or ui.ROLE_HE[role]}  ·  {ui.ROLE_HE[role]}")
+st.caption(job if job and job != role_he else role_he)
 
+open_requests = sum(1 for r in requests if r["status"] in ("open", "in_progress"))
 with st.container(horizontal=True):
-    st.metric("ישיבות קרובות", len(meetings), border=True, icon=":material/event:")
-    st.metric("טפסי הצהרה לחתימה", len(to_sign), border=True, icon=":material/draw:")
-    st.metric("תזכורות פתוחות", len(reminders), border=True, icon=":material/notifications:")
-    st.metric(requests_label, sum(1 for r in requests if r["status"] in ("open", "in_progress")),
-              border=True, icon=":material/request_quote:")
+    ui.kpi("meetings", "ישיבות קרובות", len(meetings), ":material/event:")
+    ui.kpi("sign", "טפסי הצהרה לחתימה", len(to_sign), ":material/draw:", alert=bool(to_sign))
+    ui.kpi("reminders", "תזכורות פתוחות", len(reminders), ":material/notifications:",
+           alert=any(r["severity"] == "critical" for r in reminders))
+    ui.kpi("requests", requests_label, open_requests, ":material/request_quote:",
+           alert=any(r["overdue"] and r["status"] in ("open", "in_progress") for r in requests))
 
 # ---------------------------------------------------------------- טפסים לחתימה (הכי דחוף)
 if to_sign:
-    with st.container(border=True):
+    with ui.card("to-sign", "red"):
         st.markdown("**:material/draw: טפסי הצהרת ניגוד עניינים שממתינים לחתימתך**")
         for f in to_sign:
             st.warning(f"{f['forum']}: \"{f['title']}\", {ui.fmt_date(f['meeting_at'])}. "
                        "כל עוד הטופס לא נחתם, לא ניתן להצביע בישיבה, ותישלח תזכורת כל יום.",
                        icon=":material/assignment_late:")
 
-# ---------------------------------------------------------------- תזכורות
-left, right = st.columns([3, 2])
-with right, st.container(border=True):
-    st.markdown("**:material/notifications: תזכורות**")
-    if not reminders:
-        st.caption("אין תזכורות פתוחות.")
-    for r in reminders:
-        with st.container(horizontal=True, vertical_alignment="center"):
-            st.markdown(f"{ui.SEVERITY_ICON[r['severity']]} {r['message']}  \n"
-                        f":gray[{ui.fmt_date(r['created_at'])}]")
-            if st.button("נקרא", key=f"read_{r['id']}", type="tertiary", icon=":material/done:"):
-                db.execute("UPDATE reminders SET read_at = now() WHERE id = :id AND user_id = :u",
-                           id=r["id"], u=uid)
-                st.rerun()
-
-# ---------------------------------------------------------------- ישיבות
-with left, st.container(border=True):
+# ---------------------------------------------------------------- ישיבות ותזכורות
+right, left = st.columns([3, 2])   # בעברית העמודה הראשונה מוצגת מימין
+with right, ui.card("meetings", "navy"):
     st.markdown("**:material/event: ישיבות קרובות**")
     rows = []
     for m in meetings:
@@ -108,17 +98,30 @@ with left, st.container(border=True):
     cols = {"date": "מועד", "forum": "פורום", "title": "ישיבה", "status": "מצב", "mode": "אופן"}
     cols.update({"distributed": "חומר", "unsigned": "טרם חתמו"} if sees_all_meetings
                 else {"rsvp": "אישור הגעה", "declaration": "טופס הצהרה"})
-    ui.table(rows, cols, alt="ישיבות קרובות")
+    ui.table(rows, cols, empty="אין ישיבות קרובות.")
+
+with left, ui.card("reminders", "gold"):
+    st.markdown("**:material/notifications: תזכורות**")
+    if not reminders:
+        st.caption("אין תזכורות פתוחות.")
+    for r in reminders:
+        with st.container(horizontal=True, vertical_alignment="center"):
+            st.markdown(f"{ui.SEVERITY_ICON[r['severity']]} {r['message']}  \n"
+                        f":gray[{ui.fmt_date(r['created_at'])}]")
+            if st.button("נקרא", key=f"read_{r['id']}", type="tertiary", icon=":material/done:"):
+                db.execute("UPDATE reminders SET read_at = now() WHERE id = :id AND user_id = :u",
+                           id=r["id"], u=uid)
+                st.rerun()
 
 # ---------------------------------------------------------------- החלטות ובקשות
 c1, c2 = st.columns(2)
-with c1, st.container(border=True):
+with c1, ui.card("decisions"):
     st.markdown("**:material/task_alt: החלטות באחריותי**")
     ui.table([{"text": d["text"], "due": ui.fmt_date(d["due_date"]),
                "status": ("באיחור" if d["overdue"] else {"open": "פתוחה", "in_progress": "בביצוע"}[d["status"]])}
               for d in my_decisions],
-             {"text": "החלטה", "due": "מועד", "status": "מצב"}, alt="החלטות באחריותי")
-with c2, st.container(border=True):
+             {"text": "החלטה", "due": "מועד", "status": "מצב"}, empty="אין החלטות פתוחות באחריותך.")
+with c2, ui.card("requests"):
     st.markdown(f"**:material/request_quote: {requests_label}**")
     status_he = {"open": "פתוחה", "in_progress": "בטיפול", "fulfilled": "נשלחה", "rejected": "נדחתה"}
     rows = [{"title": r["title"], "who": r.get("requester", ""), "due": ui.fmt_date(r["due_date"]),
@@ -127,4 +130,5 @@ with c2, st.container(border=True):
     cols = {"title": "בקשה", "due": "מועד מענה", "status": "מצב"}
     if role == "cfo":
         cols = {"title": "בקשה", "who": "מבקש/ת", "due": "מועד מענה", "status": "מצב"}
-    ui.table(rows, cols, alt=requests_label)
+    ui.table(rows, cols, empty="אין בקשות.")
+
