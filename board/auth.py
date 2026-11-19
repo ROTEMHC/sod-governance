@@ -141,10 +141,21 @@ def _clear_otp(user_id: int) -> None:
 
 # ------------------------------------------------------------------ אחרי הכניסה
 def load_session_user(user_id: int) -> dict:
-    return db.one("SELECT id, username, name, role, job_title, is_external, must_change, "
+    user = db.one("SELECT id, username, name, role, job_title, is_external, must_change, "
                   "password_changed_at + make_interval(days => CAST(:d AS int)) < now() AS password_expired, "
                   "(password_changed_at + make_interval(days => CAST(:d AS int)))::date - current_date AS days_to_expiry "
                   "FROM users WHERE id = :id", id=user_id, d=db.setting_int("password_max_age_days", 30))
+    # ההרשאות נטענות מטבלת permissions: לפי התפקיד, ועוד הרשאות אישיות שלא פגו
+    user["actions"] = {r["action"] for r in db.query(
+        "SELECT DISTINCT action FROM permissions WHERE (role = :r OR user_id = :u) "
+        "AND document_id IS NULL AND (expires_at IS NULL OR expires_at > now())",
+        r=user["role"], u=user_id)}
+    return user
+
+
+def can(user: dict, action: str) -> bool:
+    """האם למשתמש יש הרשאה לפעולה (לפי טבלת permissions)."""
+    return action in user.get("actions", set())
 
 
 def password_problems(pw: str) -> list[str]:

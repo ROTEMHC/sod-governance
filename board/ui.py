@@ -1,4 +1,5 @@
 """רכיבי ממשק משותפים: עברית מימין לשמאל, צבעי המותג, כרטיסים, טבלאות ותגיות מצב."""
+import re
 from datetime import date, datetime
 from html import escape
 from pathlib import Path
@@ -70,6 +71,8 @@ def rtl() -> None:
     .badge.wait {{ background: #FDF3D7; color: #8A6A0E; }}
     .badge.bad {{ background: #FBE3E0; color: #A42A1E; }}
     .badge.num {{ background: #FBE3E0; color: #A42A1E; }}
+    .note {{ color: {TEAL}; border-bottom: 1px dotted {TEAL}; cursor: help; }}
+    table.sod td.num {{ direction: ltr; text-align: right; }}
     </style>""")
 
 
@@ -108,12 +111,17 @@ def fmt_date(d) -> str:
 
 
 def _cell(value) -> str:
+    if isinstance(value, dict):   # ערך עם הסבר שמופיע במעבר עכבר (למשל תמצית ביאור)
+        return (f'<span class="note" title="{escape(value["tip"], quote=True)}">'
+                f'{escape(value["text"])} ⓘ</span>')
     text = "" if value is None else str(value)
     for kind, words in BADGE.items():
         if text in words:
             return f'<span class="badge {kind}">{escape(text)}</span>'
     if isinstance(value, int) and value > 0 and not isinstance(value, bool):
         return f'<span class="badge num">{value}</span>'
+    if re.fullmatch(r"[+\-−]?[\d,.]+%?", text):   # מספר או אחוז: נשמר בסדר משמאל לימין (‎+6.19%)
+        return f'<bdi dir="ltr">{escape(text)}</bdi>'
     return escape(text)
 
 
