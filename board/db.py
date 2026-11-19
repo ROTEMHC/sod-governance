@@ -6,6 +6,7 @@
 import ssl
 import threading
 import urllib.parse
+from pathlib import Path
 
 import pg8000.native
 import streamlit as st
@@ -29,9 +30,20 @@ def _shared():
     return {"conn": None, "lock": threading.Lock()}
 
 
+CA_FILE = Path(__file__).resolve().parent.parent / "certs" / "supabase-ca.crt"
+
+
+def _ssl_context() -> ssl.SSLContext:
+    """החיבור מוצפן ומאומת. תעודת השרת של Supabase חתומה ברשות האישורים של Supabase עצמה,
+    ולכן מאמתים אותה מול קובץ התעודה הציבורי שלהם (certs/supabase-ca.crt)."""
+    ctx = ssl.create_default_context()
+    if CA_FILE.exists():
+        ctx.load_verify_locations(cafile=str(CA_FILE))
+    return ctx
+
+
 def _open():
-    return pg8000.native.Connection(ssl_context=ssl.create_default_context(), timeout=30,
-                                    **_connect_params())
+    return pg8000.native.Connection(ssl_context=_ssl_context(), timeout=30, **_connect_params())
 
 
 def query(sql: str, **params) -> list[dict]:
