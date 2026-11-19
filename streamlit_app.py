@@ -70,13 +70,9 @@ else:
         main_pages.append(st.Page("app_pages/agent.py", title="היועץ של סוד (AI)", icon=":material/psychology:"))
     if auth.can(u, "view_audit_log"):
         main_pages.append(st.Page("app_pages/reports.py", title="דוחות בקרה", icon=":material/summarize:"))
-    pages = {
-        "": main_pages,
-        "החשבון שלי": [st.Page("app_pages/change_password.py", title="החלפת סיסמה",
-                                icon=":material/lock_reset:")],
-    }
-    page = st.navigation(pages, position="sidebar")
-    ui.topbar(state.user, logout)
+    password_page = st.Page("app_pages/change_password.py", title="החלפת סיסמה", icon=":material/lock_reset:")
+    page = st.navigation(main_pages + [password_page], position="sidebar")   # החלפת סיסמה: מתפריט הפרופיל
+    ui.topbar(state.user, logout, password_page)
     st.title(page.title)
 
 page.run()
