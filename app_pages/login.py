@@ -47,9 +47,11 @@ with mid, st.container(border=True):
             format_func=lambda c: "SMS לטלפון" if c == "sms" else "דוא\"ל")
         with st.form("login_channel"):
             if channel == "sms":
-                value = st.text_input("מספר הטלפון שלך", type="phone", autocomplete="tel")
+                # שדה טקסט רגיל: שדה הטלפון של Streamlit מוסיף קידומת של ארה"ב (+1)
+                value = st.text_input("מספר הטלפון שלך", placeholder="050-0000000", autocomplete="tel")
             else:
-                value = st.text_input("כתובת הדוא\"ל שלך", type="email", autocomplete="email")
+                value = st.text_input("כתובת הדוא\"ל שלך", placeholder="name@company.co.il",
+                                      autocomplete="email")
             submitted = st.form_submit_button("שליחת קוד", type="primary", width="stretch",
                                               icon=":material/send:")
         if submitted:
