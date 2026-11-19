@@ -54,7 +54,7 @@ if can_handle:
 tabs.append("דוחות שהתבקשו")
 if can_submit:
     tabs.append("הבקשות שלי")
-view = ui.side_menu(tabs, key="requests_view")
+view = ui.section_menu(tabs, key="requests_view")
 
 # ================================================================ בקשה חדשה (UC-23)
 if view == "בקשה חדשה":

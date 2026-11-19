@@ -62,9 +62,9 @@ with st.container(horizontal=True):
     rate = round(100 * sum(1 for m in held if m["attended"] in ("physical", "remote")) / len(held)) if held else 0
     ui.kpi("cal-rate", "שיעור הנוכחות שלי", f"{rate}%", ":material/percent:")
 
-tab_month, tab_next, tab_past = ui.side_tabs([":material/calendar_month: יומן חודשי",
-                                              ":material/event_upcoming: ישיבות קרובות",
-                                              ":material/history: ישיבות שעברו"], key="calendar_tab")
+tab_month, tab_next, tab_past = st.tabs([":material/calendar_month: יומן חודשי",
+                                         ":material/event_upcoming: ישיבות קרובות",
+                                         ":material/history: ישיבות שעברו"])
 
 # ================================================================ יומן חודשי
 with tab_month:
@@ -160,6 +160,8 @@ with tab_next:
                 ics = "\r\n".join([
                     "BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//SOD Governance//HE", "METHOD:PUBLISH",
                     "BEGIN:VEVENT", f"UID:sod-meeting-{mid}@sod-governance",
+                    # מספר גרסה עולה: אם המועד שונה, הורדה מחדש מעדכנת את אותה פגישה ביומן ולא יוצרת כפילות
+                    f"SEQUENCE:{int(datetime.now(timezone.utc).timestamp() // 60)}",
                     f"DTSTAMP:{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}",
                     f"DTSTART:{start:%Y%m%dT%H%M%SZ}", f"DTEND:{start + timedelta(hours=2):%Y%m%dT%H%M%SZ}",
                     f"SUMMARY:{m['forum']}: {m['title']}", f"LOCATION:{m['location'] or ''}",

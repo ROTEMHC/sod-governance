@@ -1,10 +1,11 @@
 # מסך 3: ישיבות (UC-08, UC-10, UC-12, UC-13). לכל ישיבה: סדר יום, מסמכים, משתתפים, פרוטוקול ונושאים פתוחים.
 # כל משתמש רואה רק ישיבות של פורום שהוא חבר בו או שהוזמן אליהן. יו"ר, מזכירות ומנהל מערכות רואים את כולן.
+import hashlib
 from datetime import datetime, timezone
 
 import streamlit as st
 
-from board import db, ui
+from board import auth, db, ui
 
 user = st.session_state.user
 uid, role = user["id"], user["role"]
@@ -52,9 +53,63 @@ with ui.card("meeting-head", "navy"):
              {"when": "מועד", "status": "מצב", "mode": "אופן", "where": "מקום",
               "materials": "חומר", "minutes": "פרוטוקול"})
 
-tab_agenda, tab_docs, tab_people, tab_minutes, tab_open = ui.side_tabs(
+can_manage = auth.can(user, "manage_meetings")      # מזכירות, יו"ר ומנהל מערכות
+can_approve = auth.can(user, "approve_minutes")     # יו"ר בלבד
+
+
+def notify_participants(rule: str, severity: str, message: str, key: str) -> None:
+    for p in db.query("SELECT user_id FROM v_meeting_participants WHERE meeting_id = :m", m=meeting_id):
+        if p["user_id"] != uid:
+            db.execute("INSERT INTO reminders (user_id, rule, severity, message, related_type, related_id, dedupe_key) "
+                       "VALUES (:u, :r, :s, :msg, 'meeting', :m, :k) ON CONFLICT (dedupe_key) DO NOTHING",
+                       u=p["user_id"], r=rule, s=severity, msg=message, m=meeting_id, k=f"{key}:{p['user_id']}")
+
+
+# ---------------------------------------------------------------- עריכת פרטי הישיבה: מועד, מקום, אופן ומצב
+if can_manage and m["status"] not in ("closed", "cancelled"):
+    with st.expander("עריכת פרטי הישיבה", icon=":material/edit_calendar:"):
+        STATUS_EDIT = ["proposed", "scheduled", "held", "cancelled"]
+        old_at = ui.local(m["meeting_at"])
+        with st.form(f"edit_meeting_{meeting_id}", border=False):
+            c1, c2 = st.columns(2)
+            new_date = c1.date_input("תאריך", old_at.date(), format="DD/MM/YYYY")
+            new_time = c2.time_input("שעה", old_at.time().replace(tzinfo=None), step=900)
+            c3, c4, c5 = st.columns(3)
+            new_loc = c3.text_input("מקום", m["location"] or "")
+            new_mode = c4.selectbox("אופן", list(ui.MODE_HE), index=list(ui.MODE_HE).index(m["mode"]),
+                                    format_func=ui.MODE_HE.get)
+            new_status = c5.selectbox("מצב", STATUS_EDIT, index=STATUS_EDIT.index(m["status"]),
+                                      format_func=ui.STATUS_HE.get)
+            reason = st.text_input("סיבת השינוי (תישלח למשתתפים)")
+            if st.form_submit_button("שמירת השינויים", type="primary", icon=":material/save:"):
+                new_at = datetime.combine(new_date, new_time, tzinfo=ui.israel_tz())
+                moved = new_at != old_at
+                if (moved or new_status == "cancelled") and not reason.strip():
+                    st.error("בשינוי מועד או בביטול יש לכתוב את הסיבה.")
+                else:
+                    db.execute("UPDATE meetings SET meeting_at = :at, location = :loc, mode = :mode, status = :s "
+                               "WHERE id = :m", at=new_at, loc=new_loc.strip() or None, mode=new_mode,
+                               s=new_status, m=meeting_id)
+                    if moved:   # המועד השתנה: אישורי ההגעה הקודמים כבר לא תקפים
+                        db.execute("UPDATE attendance SET rsvp = NULL, rsvp_at = NULL, absence_reason = NULL, "
+                                   "absence_note = NULL, absence_justified = NULL, absence_reviewed_by = NULL "
+                                   "WHERE meeting_id = :m AND attended IS NULL", m=meeting_id)
+                    what = (f"הישיבה \"{m['title']}\" הוזזה מ-{ui.fmt_date(old_at)} ל-{ui.fmt_date(new_at)}. "
+                            "יש לאשר הגעה מחדש." if moved else
+                            f"הישיבה \"{m['title']}\" בוטלה." if new_status == "cancelled" else
+                            f"פרטי הישיבה \"{m['title']}\" עודכנו.")
+                    notify_participants("meeting_changed", "warning" if moved or new_status == "cancelled" else "info",
+                                        what + (f" סיבה: {reason.strip()}" if reason.strip() else ""),
+                                        f"meeting_changed:{meeting_id}:{new_at.isoformat()}:{new_status}")
+                    db.audit(uid, "meeting_updated", "meeting", meeting_id, what + f" | {reason.strip()}")
+                    st.toast("השינויים נשמרו והמשתתפים קיבלו הודעה.", icon=":material/check_circle:")
+                    st.rerun()
+        st.caption("בשינוי מועד: אישורי ההגעה מתאפסים, כל משתתף מקבל תזכורת לאשר מחדש, "
+                   "והורדה מחדש של קובץ היומן מעדכנת את הפגישה ביומן האישי.")
+
+tab_agenda, tab_docs, tab_people, tab_minutes, tab_open = st.tabs(
     [":material/list_alt: סדר יום", ":material/folder: מסמכים", ":material/group: משתתפים",
-     ":material/description: פרוטוקול", ":material/pending_actions: נושאים פתוחים"], key="meeting_tab")
+     ":material/description: פרוטוקול", ":material/pending_actions: נושאים פתוחים"])
 
 # ================================================================ סדר יום ותבנית החובה
 with tab_agenda:
@@ -209,10 +264,68 @@ with tab_minutes:
         if status == "approved":
             st.caption(f"אושר ונחתם בידי {m['approved_by']} · {ui.fmt_date(m['minutes_approved_at'])}. "
                        "פרוטוקול חתום משמש ראיה לכאורה למה שנאמר בישיבה, ונשמר לפחות 7 שנים.")
-        if m["minutes_body"]:
+        editable = can_manage and status != "approved"
+        if m["minutes_body"] and not editable:
             st.markdown(m["minutes_body"])
-        else:
-            st.caption("הפרוטוקול ייכתב בזמן הישיבה או אחריה.")
+        elif not editable:
+            st.caption("הפרוטוקול ייכתב בזמן הישיבה או אחריה, בידי מזכירות החברה.")
+
+        # ---- כתיבת הפרוטוקול: טיוטה, הפצה להערות המשתתפים, ואישור וחתימה של היו"ר
+        if editable:
+            st.caption("שלבים: טיוטה ← הפצה להערות המשתתפים ← אישור וחתימה של היו\"ר. "
+                       "אחרי החתימה הפרוטוקול נעול לעריכה.")
+            with st.form(f"minutes_{meeting_id}", border=False):
+                body = st.text_area("נוסח הפרוטוקול", m["minutes_body"] or "", height=320,
+                                    placeholder="נכחו: ...\nנושא 1: מה הוצג, אילו שאלות נשאלו, אילו חלופות נבחנו, "
+                                                "מה הוחלט ומי הסתייג.\nנושא 2: ...")
+                c1, c2 = st.columns(2)
+                save = c1.form_submit_button("שמירת טיוטה", icon=":material/save:", width="stretch")
+                send = c2.form_submit_button("הפצה להערות המשתתפים", icon=":material/forward_to_inbox:",
+                                             type="primary", width="stretch")
+                if save or send:
+                    if not body.strip():
+                        st.error("הפרוטוקול ריק.")
+                    else:
+                        new_status = "circulated" if send else ("draft" if status in ("none", "draft") else status)
+                        db.execute("UPDATE meetings SET minutes_body = :b, minutes_status = :s WHERE id = :m",
+                                   b=body.strip(), s=new_status, m=meeting_id)
+                        db.audit(uid, "minutes_" + ("circulated" if send else "saved"), "meeting", meeting_id, None)
+                        if send:
+                            notify_participants("minutes_circulated", "info",
+                                                f"טיוטת הפרוטוקול של \"{m['title']}\" הופצה להערות.",
+                                                f"minutes:{meeting_id}:{datetime.now(timezone.utc):%Y%m%d%H%M}")
+                        st.toast("הפרוטוקול הופץ למשתתפים." if send else "הטיוטה נשמרה.",
+                                 icon=":material/check_circle:")
+                        st.rerun()
+        if can_approve and status == "circulated":
+            # חתימת היו"ר: אישור שקרא + קוד SMS חד-פעמי, כמו בטופס ניגוד העניינים
+            code_key = f"minutes_code_{meeting_id}"
+            ok = st.checkbox("קראתי את הפרוטוקול, והוא משקף נאמנה את מה שנאמר והוחלט בישיבה",
+                             key=f"approve_ok_{meeting_id}")
+            if st.button("שליחת קוד לחתימה", icon=":material/sms:", disabled=not ok, key=f"approve_{meeting_id}"):
+                st.session_state[code_key] = auth.send_otp(uid, "sms")
+            if code_key in st.session_state:
+                st.info(f"הקוד שנשלח: **{st.session_state[code_key]}**",
+                        title="מצב הדגמה: אין חיבור לשירות SMS", icon=":material/sms:")
+                code = st.text_input("קוד החתימה", max_chars=6, key=f"minutes_code_in_{meeting_id}")
+                if st.button("חתימה על הפרוטוקול", type="primary", icon=":material/verified:",
+                             key=f"minutes_sign_{meeting_id}"):
+                    verified, err = auth.verify_otp(uid, code, purpose="minutes_otp_verified")
+                    if not verified:
+                        st.error(err)
+                    else:
+                        # חותמת שלמות: גיבוב של הנוסח החתום, כדי שאפשר יהיה להוכיח שלא שונה אחר כך
+                        sha = hashlib.sha256((m["minutes_body"] or "").encode("utf-8")).hexdigest()
+                        db.execute("UPDATE meetings SET minutes_status = 'approved', minutes_approved_by = :u, "
+                                   "minutes_approved_at = now() WHERE id = :m", u=uid, m=meeting_id)
+                        db.audit(uid, "minutes_approved", "meeting", meeting_id, f"נחתם בקוד SMS | SHA-256: {sha}")
+                        notify_participants("minutes_approved", "info", f"הפרוטוקול של \"{m['title']}\" אושר ונחתם.",
+                                            f"minutes_approved:{meeting_id}")
+                        del st.session_state[code_key]
+                        st.toast("הפרוטוקול נחתם.", icon=":material/verified:")
+                        st.rerun()
+        elif status == "circulated":
+            st.caption("הפרוטוקול הופץ להערות וממתין לאישור היו\"ר. הערות שולחים למזכירות החברה.")
     decisions = db.query(
         "SELECT ai.position, ai.title AS item, d.text, u.name AS owner, d.due_date, d.status, "
         "d.status <> 'done' AND d.due_date < current_date AS overdue "

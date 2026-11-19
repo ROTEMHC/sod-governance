@@ -7,7 +7,6 @@ from datetime import date, timedelta
 import streamlit as st
 
 from board import agent, auth, db, ui
-from board import financials as fin
 
 user = st.session_state.user
 uid, role = user["id"], user["role"]
@@ -66,21 +65,17 @@ def request_report(r: dict) -> str:
     return f"הבקשה \"{r['title']}\" נשלחה ל{cfo['name']}, עם מועד מענה {ui.fmt_date(due)}."
 
 
-# ---------------------------------------------------------------- מצב בלי מפתח API: ניתוח מחושב בלבד
-if not agent.available():
-    st.info("כדי להפעיל את הסוכן המלא צריך להגדיר מפתח API של Anthropic בהגדרות (Secrets). "
-            "בינתיים מוצג הניתוח המחושב מהדוחות.", icon=":material/key:", title="הסוכן פועל במצב מצומצם")
-    with ui.card("offline", "gold"):
-        st.markdown("**ניתוח מחושב: המכירות עלו, למה הרווח ירד?**")
-        for line in fin.agent_explanation():
-            st.markdown(f"- {line}")
-        st.markdown("**שאלות מומלצות להנהלה**")
-        for q in fin.agent_questions():
-            st.markdown(f"- {q}")
-    st.stop()
+# ---------------------------------------------------------------- מצב בלי מפתח API: ניתוח לפי כללים, לכל דיון בנפרד
+online = agent.available()
+if not online:
+    st.caption(":material/key: הסוכן פועל במצב מצומצם, בלי מודל שפה: הסקירה נבנית לפי נושא הדיון, תבנית החובה "
+               "והקטעים הרלוונטיים בדוחות. שיחה חופשית זמינה אחרי הגדרת מפתח API.")
+    conflicts = db.one("SELECT count(*) AS n FROM item_responses WHERE agenda_item_id = :i AND has_conflict",
+                       i=item["id"])["n"] if item else 0
+    state["brief"], state["pages"] = agent.offline_brief(item, conflicts)
 
 # ---------------------------------------------------------------- סקירה לדיון
-if st.button("הכנת סקירה לדיון", type="primary", icon=":material/auto_awesome:"):
+if online and st.button("הכנת סקירה לדיון", type="primary", icon=":material/auto_awesome:"):
     with st.spinner("קורא את הדוחות והביאורים הרלוונטיים..."):
         try:
             state["brief"], state["pages"] = agent.brief(item)
@@ -113,9 +108,14 @@ if b:
                     if auth.can(user, "submit_request"):
                         if st.button("לבקש את הדוח", key=f"req_{item_id}_{i}", icon=":material/send:"):
                             st.success(request_report(r), icon=":material/check_circle:")
-    with st.expander(f"מקורות שהסוכן קרא ({len(state['pages'])} עמודים)"):
+    with st.expander(f"קטעים רלוונטיים מהדוחות ({len(state['pages'])} עמודים)", icon=":material/menu_book:"):
         for p in state["pages"]:
-            st.markdown(f"- {p['source']}, עמוד {p['page']}")
+            st.markdown(f"**{p['source']}, עמוד {p['page']}**")
+            if p.get("snippet"):
+                st.caption(p["snippet"])
+
+if not online:
+    st.stop()
 
 # ---------------------------------------------------------------- שיחה חופשית
 st.markdown("#### :material/forum: שאלות נוספות")

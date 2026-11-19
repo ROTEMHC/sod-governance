@@ -8,7 +8,7 @@ STATUS_DEC = {"open": "פתוחה", "in_progress": "בביצוע", "done": "בו
 REASON_HE = {"bereavement": "אבל", "illness": "מחלה", "emergency": "חירום",
              "reserve_duty": "מילואים", "other": "אחר", None: ""}
 
-view = ui.side_menu(["מעקב החלטות", "היעדרויות", "תמונת מצב ישיבות"], key="reports_view")
+view = ui.section_menu(["מעקב החלטות", "היעדרויות", "תמונת מצב ישיבות"], key="reports_view")
 
 # ================================================================ מעקב החלטות
 if view == "מעקב החלטות":
@@ -43,14 +43,14 @@ elif view == "היעדרויות":
         s = summary.setdefault(r["user_name"], {"name": r["user_name"], "total": 0, "unjustified": 0})
         s["total"] += 1
         s["unjustified"] += r["status"] == "לא מוצדקת"
-    left, right = st.columns([3, 2])
-    with left, ui.card("absences", "navy"):
+    # זו מתחת לזו, כדי שהטבלה המפורטת לא תחרוג מהכרטיס
+    with ui.card("absences", "navy"):
         st.markdown("**כל ההיעדרויות**")
         ui.table([{"name": r["user_name"], "date": ui.fmt_date(r["meeting_date"]), "meeting": f"{r['forum']}: {r['title']}",
                    "reason": REASON_HE[r["absence_reason"]], "status": r["status"]} for r in rows],
                  {"name": "דירקטור/ית", "date": "תאריך", "meeting": "ישיבה", "reason": "סיבה", "status": "החלטת היו\"ר"},
                  empty="אין היעדרויות.")
-    with right, ui.card("absence-summary", "gold"):
+    with ui.card("absence-summary", "gold"):
         st.markdown("**סיכום לכל דירקטור/ית**")
         ui.table(list(summary.values()), {"name": "דירקטור/ית", "total": "היעדרויות", "unjustified": "לא מוצדקות"})
     st.caption("היעדרות לא מוצדקת אינה מסירה מהדירקטור אחריות להחלטות שהתקבלו בישיבה. "

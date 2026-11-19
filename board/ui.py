@@ -56,21 +56,12 @@ def rtl() -> None:
         width: auto !important; max-width: 100% !important; }}
     [data-testid="stSidebarHeader"] {{ height: auto !important; padding-top: 18px; padding-bottom: 6px; }}
 
-    /* שורה עליונה: משתמש והתנתקות בצד שמאל */
-    .st-key-topbar {{ border-bottom: 1px solid #E3E8F0; padding-bottom: 4px; }}
-    .st-key-topbar p {{ margin: 0; font-size: 0.9rem; }}
-    .st-key-logout_btn button {{ font-size: 0.85rem; color: #6B7280; padding: 0 6px; min-height: 0; }}
-
-    /* לשוניות לאורך: תפריט בצד ימין, הלשונית הנבחרת מודגשת */
-    [class*="st-key-sidemenu"] [role="radiogroup"] {{ flex-direction: column; gap: 4px; width: 100%; }}
-    [class*="st-key-sidemenu"] [role="radiogroup"] label {{ width: 100%; margin: 0; padding: 9px 12px;
-        border-radius: 8px; border-right: 4px solid transparent; background: #F4F7FB; cursor: pointer; }}
-    [class*="st-key-sidemenu"] [role="radiogroup"] label > div > div:not([data-testid]) {{ display: none; }}
-    [class*="st-key-sidemenu"] [role="radiogroup"] label:hover {{ background: #E9EEF6; }}
-    [class*="st-key-sidemenu"] [role="radiogroup"] label[data-selected="true"] {{
-        background: #E3F4EF; border-right-color: {TEAL}; }}
-    [class*="st-key-sidemenu"] [role="radiogroup"] label[data-selected="true"] p {{ color: {NAVY}; font-weight: 700; }}
-    [class*="st-key-pane-hide"] {{ display: none !important; }}
+    /* תפריט הפרופיל: קבוע בפינה השמאלית העליונה של המסך */
+    .st-key-topbar {{ position: fixed; top: 10px; left: 18px; z-index: 999990; width: auto !important; }}
+    .st-key-topbar button p {{ font-weight: 600; color: {NAVY}; }}
+    .st-key-topbar [data-testid="stIconMaterial"] {{ font-size: 1.7rem; color: {NAVY}; }}
+    /* החלפת סיסמה נמצאת בתפריט הפרופיל, ולא בתפריט הצד */
+    [data-testid="stSidebarNav"] li:has(a[href$="change_password"]) {{ display: none; }}
 
     /* מדדים בראש הדף */
     [class*="st-key-kpi"] {{ background: linear-gradient(135deg, {NAVY} 0%, #2E5597 100%);
@@ -116,30 +107,19 @@ def brand(center: bool = False) -> None:
         st.logo(str(LOGO_TAGLINE), size="large", icon_image=str(LOGO))
 
 
-def topbar(user: dict, on_logout) -> None:
-    """שורה עליונה: פרטי המשתמש וכפתור התנתקות קטן, בצד שמאל של המסך."""
-    with st.container(horizontal=True, horizontal_alignment="left", vertical_alignment="center", key="topbar"):
-        st.button("התנתקות", on_click=on_logout, icon=":material/logout:", type="tertiary", key="logout_btn")
-        st.markdown(f":material/account_circle: **{user['name']}** · :gray[{ROLE_HE[user['role']]}]")
+def topbar(user: dict, on_logout, password_page) -> None:
+    """תפריט הפרופיל: אייקון ושם בפינה השמאלית העליונה של המסך. בלחיצה: החלפת סיסמה והתנתקות."""
+    with st.container(key="topbar"):
+        with st.popover(user["name"], icon=":material/account_circle:", type="tertiary"):
+            st.markdown(f"**{user['name']}**  \n:gray[{ROLE_HE[user['role']]}]")
+            st.page_link(password_page, label="החלפת סיסמה", icon=":material/lock_reset:")
+            st.button("התנתקות", on_click=on_logout, icon=":material/logout:", type="tertiary", key="logout_btn")
 
 
-def side_menu(options: list[str], key: str, default: str | None = None) -> str:
-    """תפריט לשוניות לאורך, בצד ימין. מחזיר את הבחירה, ושאר הדף מוצג בעמודה שלצידו."""
-    menu, body = st.columns([1, 3.2], gap="medium")
-    with menu, st.container(key=f"sidemenu-{key}"):
-        choice = st.radio(key, options, index=options.index(default) if default in options else 0,
-                          key=key, label_visibility="collapsed")
-    body.__enter__()   # כל מה שהדף מציג מכאן והלאה נכנס לעמודת התוכן
-    return choice
-
-
-def side_tabs(labels: list[str], key: str) -> list:
-    """כמו st.tabs, אבל עם לשוניות לאורך בצד ימין. מחזיר מכל לשונית, ורק הנבחרת מוצגת."""
-    menu, body = st.columns([1, 3.2], gap="medium")
-    with menu, st.container(key=f"sidemenu-{key}"):
-        choice = st.radio(key, labels, key=key, label_visibility="collapsed")
-    return [body.container(key=f"pane{'' if lab == choice else '-hide'}-{key}-{i}")
-            for i, lab in enumerate(labels)]
+def section_menu(options: list[str], key: str) -> str:
+    """מעבר בין חלקי המסך: כפתורים לרוחב, ורק החלק שנבחר מוצג."""
+    return st.segmented_control(key, options, default=options[0], required=True, key=key,
+                                label_visibility="collapsed")
 
 
 def card(name: str, color: str = "teal"):
@@ -154,15 +134,17 @@ def kpi(name: str, label: str, value, icon: str, alert: bool = False) -> None:
         st.metric(label, value, icon=icon)
 
 
-def local(d: datetime) -> datetime:
-    """שעה לפי שעון ישראל. המסד שומר שעות ב-UTC, והשרת בענן רץ ב-UTC."""
-    if d.tzinfo is None:
-        return d
+def israel_tz():
     try:
         from zoneinfo import ZoneInfo
-        return d.astimezone(ZoneInfo("Asia/Jerusalem"))
+        return ZoneInfo("Asia/Jerusalem")
     except Exception:   # אין מסד אזורי זמן במחשב: שעון חורף של ישראל
-        return d.astimezone(timezone(timedelta(hours=2)))
+        return timezone(timedelta(hours=2))
+
+
+def local(d: datetime) -> datetime:
+    """שעה לפי שעון ישראל. המסד שומר שעות ב-UTC, והשרת בענן רץ ב-UTC."""
+    return d if d.tzinfo is None else d.astimezone(israel_tz())
 
 
 def fmt_date(d) -> str:
