@@ -50,7 +50,7 @@ if not state.get("user"):
     page = st.navigation([st.Page("app_pages/login.py", title="כניסה", icon=":material/login:")],
                          position="hidden")
 elif state.user["must_change"] or state.user["password_expired"]:
-    ui.brand()
+    ui.brand(center=True)   # אין תפריט צד במסך הזה, ולכן הלוגו מוצג במרכז ולא בשורה העליונה
     page = st.navigation([st.Page("app_pages/change_password.py", title="החלפת סיסמה",
                                   icon=":material/lock_reset:")], position="hidden")
     st.title("החלפת סיסמה")
