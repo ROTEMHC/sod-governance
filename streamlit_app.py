@@ -75,4 +75,25 @@ else:
     ui.topbar(state.user, logout, password_page)
     st.title(page.title)
 
-page.run()
+# ---------------------------------------------------------------- הרצת המסך, עם הודעת שגיאה ברורה
+# המשתמש לעולם לא רואה הודעה טכנית באנגלית. הפרטים הטכניים נשמרים ביומן הפעולות עם מספר אירוע,
+# כדי שהתמיכה תוכל לאתר אותם.
+def show_error(message: str, technical: str, unexpected: bool) -> None:
+    ref = f"E-{int(time.time()) % 1_000_000:06d}"
+    try:
+        db.audit(state.user["id"] if state.get("user") else None, "error", None, None,
+                 f"{ref} | {page.title} | {technical}"[:1500])
+    except Exception:
+        pass   # גם אם המסד אינו זמין, המשתמש מקבל הודעה
+    st.error(message + f"  \nמספר אירוע לפנייה לתמיכה: **{ref}**",
+             icon=":material/error:" if unexpected else ":material/info:",
+             title="משהו השתבש" if unexpected else "הפעולה לא בוצעה")
+
+
+try:
+    page.run()
+except db.UserError as e:
+    show_error(str(e), e.technical, unexpected=False)
+except Exception as e:   # תקלה לא צפויה (באג): הודעה כללית, ופרטים טכניים ליומן
+    show_error("אירעה תקלה לא צפויה, והפעולה לא הושלמה. הנתונים שכבר נשמרו לא נפגעו. "
+               "אפשר לרענן את המסך (F5) ולנסות שוב.", f"{type(e).__name__}: {e}", unexpected=True)
