@@ -5,6 +5,13 @@ from board import auth, db
 
 user = st.session_state.user
 
+# אחרי החלפה מוצלחת המסך מתרענן, ולכן ההודעה נשמרת ומוצגת אחרי הרענון. בלי זה המשתמש רואה
+# שוב טופס ריק, וחושב שההחלפה נכשלה (תקלה D-07, נמצאה בבדיקה ידנית)
+if st.session_state.pop("password_changed", False):
+    st.success("הסיסמה הוחלפה בהצלחה. מעכשיו נכנסים עם הסיסמה החדשה.", icon=":material/check_circle:")
+    st.page_link("app_pages/home.py", label="המשך למערכת", icon=":material/arrow_back:")
+    st.stop()
+
 if user["must_change"]:
     st.warning("זו כניסה ראשונה למערכת. יש לבחור סיסמה אישית לפני ההמשך.", icon=":material/key:")
 elif user["password_expired"]:
@@ -30,5 +37,5 @@ if submitted:
             st.error(err)
         else:
             st.session_state.user = auth.load_session_user(user["id"])
-            st.success("הסיסמה הוחלפה.", icon=":material/check_circle:")
+            st.session_state.password_changed = True   # ההודעה תוצג אחרי הרענון
             st.rerun()

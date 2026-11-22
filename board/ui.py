@@ -52,7 +52,8 @@ def rtl() -> None:
     [class*="st-key-card-red"] {{ border-top-color: #C0392B !important; background: #FFF8F7; }}
 
     /* לוגו גדול בראש התפריט */
-    [data-testid="stSidebarLogo"], [data-testid="stHeaderLogo"] {{ height: 96px !important; max-height: 96px !important;
+    /* רק בתפריט הצד; בשורה העליונה הצרה הלוגו נשאר בגודל הרגיל, כדי שלא ייחתך */
+    [data-testid="stSidebarLogo"] {{ height: 96px !important; max-height: 96px !important;
         width: auto !important; max-width: 100% !important; }}
     [data-testid="stSidebarHeader"] {{ height: auto !important; padding-top: 18px; padding-bottom: 6px; }}
 
