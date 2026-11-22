@@ -24,8 +24,10 @@ with st.chat_message("assistant", avatar=":material/psychology:"):
 access = "" if sees_all else "AND m.id IN (SELECT meeting_id FROM v_meeting_participants WHERE user_id = :u)"
 items = db.query(
     "SELECT ai.id, ai.meeting_id, ai.position, ai.title, ai.item_type, ai.summary, ai.decision_required, "
-    "ai.alternatives, ai.no_go_option, ai.risks, ai.negative_scenario, m.title AS meeting, m.meeting_at, "
+    "ai.alternatives, ai.no_go_option, ai.risks, ai.negative_scenario, ai.risk_level, ai.risk_mitigation, "
+    "ai.risk_indicators, ro.name AS risk_owner, m.title AS meeting, m.meeting_at, "
     "f.name AS forum FROM agenda_items ai JOIN meetings m ON m.id = ai.meeting_id "
+    "LEFT JOIN users ro ON ro.id = ai.risk_owner_id "
     "JOIN forums f ON f.id = m.forum_id WHERE m.status <> 'cancelled' " + access +
     " ORDER BY (m.meeting_at < now()), abs(extract(epoch FROM (m.meeting_at - now()))), ai.position", u=uid)
 GENERAL = 0

@@ -1,7 +1,7 @@
 # מסך 2: דף הבית "המשימות שלי" (UC-17). דף אחד לכולם, והתוכן משתנה לפי התפקיד.
 import streamlit as st
 
-from board import db, ui
+from board import auth, db, ui
 
 user = st.session_state.user
 uid, role = user["id"], user["role"]
@@ -28,11 +28,11 @@ else:
         "WHERE p.user_id = :u AND m.status IN ('proposed','scheduled') AND m.meeting_at >= now() "
         "ORDER BY m.meeting_at", u=uid)
 
+# כל ישיבה קרובה (שנקבעה) שהמשתמש משתתף בה ועוד לא חתם בה על טופס ההצהרה
 to_sign = db.query(
-    "SELECT m.id, m.meeting_at, f.name AS forum, m.title, a.declaration_sent_at "
-    "FROM attendance a JOIN meetings m ON m.id = a.meeting_id JOIN forums f ON f.id = m.forum_id "
-    "WHERE a.user_id = :u AND a.declaration_sent_at IS NOT NULL AND a.declaration_signed_at IS NULL "
-    "AND m.meeting_at >= now() ORDER BY m.meeting_at", u=uid)
+    "SELECT m.id, m.meeting_at, p.forum, p.title FROM v_meeting_participants p JOIN meetings m ON m.id = p.meeting_id "
+    "WHERE p.user_id = :u AND p.declaration_signed_at IS NULL AND m.status = 'scheduled' AND m.meeting_at >= now() "
+    "ORDER BY m.meeting_at", u=uid) if auth.can(user, "sign_declaration") else []
 
 reminders = db.query(
     "SELECT id, severity, message, created_at FROM reminders WHERE user_id = :u AND read_at IS NULL "
@@ -74,10 +74,13 @@ with st.container(horizontal=True):
 if to_sign:
     with ui.card("to-sign", "red"):
         st.markdown("**:material/draw: טפסי הצהרת ניגוד עניינים שממתינים לחתימתך**")
+        st.caption("כל עוד הטופס לא נחתם, לא ניתן להצביע בישיבה, ותישלח תזכורת כל יום.")
         for f in to_sign:
-            st.warning(f"{f['forum']}: \"{f['title']}\", {ui.fmt_date(f['meeting_at'])}. "
-                       "כל עוד הטופס לא נחתם, לא ניתן להצביע בישיבה, ותישלח תזכורת כל יום.",
-                       icon=":material/assignment_late:")
+            with st.container(horizontal=True, vertical_alignment="center"):
+                st.markdown(f":material/assignment_late: **{f['forum']}: {f['title']}** · {ui.fmt_date(f['meeting_at'])}")
+                if st.button("לחתימה על הטופס", key=f"sign_go_{f['id']}", icon=":material/draw:", type="primary"):
+                    st.session_state["sign_open"] = f["id"]
+                    st.switch_page("app_pages/calendar.py")
 
 # ---------------------------------------------------------------- ישיבות ותזכורות
 right, left = st.columns([3, 2])   # בעברית העמודה הראשונה מוצגת מימין
@@ -93,7 +96,7 @@ with right, ui.card("meetings", "navy"):
         else:
             row["rsvp"] = ui.RSVP_HE.get(m["rsvp"])
             row["declaration"] = ("נחתם" if m["declaration_signed_at"] else
-                                  "ממתין לחתימה" if m["declaration_sent_at"] else "טרם נשלח")
+                                  "" if m["status"] == "proposed" else "ממתין לחתימה")
         rows.append(row)
     cols = {"date": "מועד", "forum": "פורום", "title": "ישיבה", "status": "מצב", "mode": "אופן"}
     cols.update({"distributed": "חומר", "unsigned": "טרם חתמו"} if sees_all_meetings

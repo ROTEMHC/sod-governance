@@ -57,7 +57,9 @@ def rtl() -> None:
     [data-testid="stSidebarHeader"] {{ height: auto !important; padding-top: 18px; padding-bottom: 6px; }}
 
     /* תפריט הפרופיל: קבוע בפינה השמאלית העליונה של המסך */
-    .st-key-topbar {{ position: fixed; top: 10px; left: 18px; z-index: 999990; width: auto !important; }}
+    .st-key-topbar {{ position: fixed; top: 10px; left: 18px; right: auto; z-index: 999990;
+        width: max-content !important; max-width: 40vw; }}
+    .st-key-topbar * {{ width: max-content !important; white-space: nowrap; overflow: visible !important; }}
     .st-key-topbar button p {{ font-weight: 600; color: {NAVY}; }}
     .st-key-topbar [data-testid="stIconMaterial"] {{ font-size: 1.7rem; color: {NAVY}; }}
     /* החלפת סיסמה נמצאת בתפריט הפרופיל, ולא בתפריט הצד */

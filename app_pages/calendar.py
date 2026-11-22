@@ -62,9 +62,27 @@ with st.container(horizontal=True):
     rate = round(100 * sum(1 for m in held if m["attended"] in ("physical", "remote")) / len(held)) if held else 0
     ui.kpi("cal-rate", "שיעור הנוכחות שלי", f"{rate}%", ":material/percent:")
 
-tab_month, tab_next, tab_past = st.tabs([":material/calendar_month: יומן חודשי",
-                                         ":material/event_upcoming: ישיבות קרובות",
+can_manage = auth.can(user, "manage_meetings")
+
+
+def open_meetings(meeting_id: int | None = None) -> None:
+    """מעבר למסך הישיבות: לקביעת ישיבה חדשה, או לשינוי מועד של ישיבה מסוימת."""
+    if meeting_id:
+        st.session_state.update(meeting_when="כולן", meeting_pick=meeting_id, open_edit_meeting=True)
+    else:
+        st.session_state["open_new_meeting"] = True
+    st.switch_page("app_pages/meetings.py")
+
+
+if can_manage and st.button("קביעת ישיבה חדשה", icon=":material/add_circle:", key="cal_new_meeting",
+                            type="primary"):
+    open_meetings()
+
+# "ישיבות קרובות" ראשונה: שם הפעולות שצריך לעשות לפני כל ישיבה (אישור הגעה וטופס ההצהרה)
+tab_next, tab_month, tab_past = st.tabs([":material/event_upcoming: ישיבות קרובות: אישור הגעה וטופס הצהרה",
+                                         ":material/calendar_month: יומן חודשי",
                                          ":material/history: ישיבות שעברו"])
+sign_open = st.session_state.get("sign_open")   # הגיעו מכפתור "לחתימה על הטופס": הטופס נשאר פתוח עד החתימה
 
 # ================================================================ יומן חודשי
 with tab_month:
@@ -127,6 +145,9 @@ with tab_next:
                        + ("" if m["is_forum_member"] else " · הוזמנת לנושאים הרלוונטיים לתפקידך"))
             if items:
                 st.markdown("**על סדר היום:** " + " · ".join(f"{i['position']}. {i['title']}" for i in items))
+            if can_manage and st.button("שינוי מועד, פרטים או סדר יום", icon=":material/edit_calendar:",
+                                        key=f"edit_{mid}", type="tertiary"):
+                open_meetings(mid)
 
             # ---- אישור הגעה, ואם לא מגיעים: סיבה חובה
             c1, c2 = st.columns([3, 2])
@@ -173,7 +194,7 @@ with tab_next:
                                    icon=":material/event_available:", key=f"ics_{mid}", width="stretch")
                 st.caption("ביומן האישי נשמרים רק המועד והמקום. החומרים עצמם נשארים במערכת.")
 
-                # ---- הצטרפות מרחוק, רק אחרי קוד אימות
+                # ---- הצטרפות מרחוק: הזדהות מחדש (סיסמה) ואז קוד אימות, גם אם המשתמש כבר מחובר
                 if m["mode"] in ("remote", "hybrid") and m["status"] == "scheduled":
                     opens = start - timedelta(minutes=30)
                     is_open = DEMO or datetime.now(timezone.utc) >= opens
@@ -182,7 +203,16 @@ with tab_next:
                                        icon=":material/videocam:", type="primary", width="stretch")
                     elif st.button("הצטרפות מרחוק", key=f"join_{mid}", icon=":material/videocam:",
                                    disabled=not is_open, width="stretch"):
-                        st.session_state[f"join_code_{mid}"] = auth.send_otp(uid, "sms")
+                        st.session_state[f"join_pw_{mid}"] = True
+                    if st.session_state.get(f"join_pw_{mid}") and f"join_code_{mid}" not in st.session_state:
+                        pw = st.text_input("הסיסמה שלך במערכת", type="password", key=f"join_pw_in_{mid}")
+                        if st.button("אימות ושליחת קוד", key=f"join_pw_ok_{mid}"):
+                            ok_user, err = auth.check_password(user["username"], pw)   # כישלון נספר לנעילת החשבון
+                            if ok_user:
+                                st.session_state[f"join_code_{mid}"] = auth.send_otp(uid, "sms")
+                                st.rerun()
+                            else:
+                                st.error(err)
                     if not is_open:
                         st.caption(f"הכניסה תיפתח ב-{ui.fmt_date(opens)}, 30 דקות לפני הישיבה.")
                     if f"join_code_{mid}" in st.session_state and not st.session_state.get(f"joined_{mid}"):
@@ -205,11 +235,16 @@ with tab_next:
             # ---- טופס הצהרת ניגוד עניינים
             if m["status"] == "proposed":
                 continue
+            if not auth.can(user, "sign_declaration"):   # רק מי שיש לו/ה הרשאת חתימה בטבלת ההרשאות
+                continue
             if m["declaration_signed_at"]:
                 st.success(f"טופס הצהרת ניגוד העניינים נחתם ב-{ui.fmt_date(m['declaration_signed_at'])}.",
                            icon=":material/verified:")
                 continue
-            with st.expander("טופס הצהרת ניגוד עניינים: יש לחתום לפני הישיבה", icon=":material/draw:"):
+            st.error("טרם חתמת על טופס הצהרת ניגוד העניינים לישיבה זו. בלי חתימה לא ניתן להצביע.",
+                     icon=":material/assignment_late:")
+            with st.expander("**חתימה על טופס הצהרת ניגוד עניינים**", icon=":material/draw:",
+                             expanded=sign_open == mid):
                 st.caption("לכל נושא בסדר היום יש לסמן במפורש אם יש לך עניין אישי. "
                            "מי שלא חתם לא יוכל להצביע, ומי שיש לו עניין אישי בנושא לא יצביע עליו.")
                 answers, complete = {}, True
@@ -261,6 +296,7 @@ with tab_next:
                                               declaration_signed_at=now)
                             db.audit(uid, "declaration_signed", "meeting", mid, f"SHA-256: {sha}")
                             del st.session_state[code_key]
+                            st.session_state.pop("sign_open", None)
                             st.toast("הטופס נחתם ונשמר עם חותמת שלמות.", icon=":material/verified:")
                             st.rerun()
 

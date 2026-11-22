@@ -46,8 +46,87 @@ def _open():
     return pg8000.native.Connection(ssl_context=_ssl_context(), timeout=30, **_connect_params())
 
 
+# ---------------------------------------------------------------- הודעות שגיאה ברורות למשתמש
+class UserError(Exception):
+    """שגיאה שמוצגת למשתמש בעברית, בלי פרטים טכניים. הפרטים הטכניים נשמרים ביומן."""
+
+    def __init__(self, message: str, technical: str = ""):
+        super().__init__(message)
+        self.technical = technical
+
+
+# הפרות של חוקים עסקיים שהמסד אוכף (שם האילוץ ← הסבר למשתמש)
+CONSTRAINT_HE = {
+    "absence_needs_reason": "כשלא מגיעים לישיבה, חובה לבחור סיבת היעדרות.",
+    "other_reason_needs_note": "בסיבת היעדרות \"אחר\" חובה לפרט.",
+    "absence_review_complete": "החלטה על היעדרות חייבת לכלול גם את מי שהחליט/ה.",
+    "signed_declaration_complete": "לא ניתן לחתום: חסרה תשובה לאחד הנושאים, אישור קריאת החומר או קוד האימות.",
+    "signed_form_has_hash": "טופס חתום חייב לכלול חותמת שלמות.",
+    "field_check_linked_to_item": "ממצא בדיקת שטח חייב להיות מקושר לנושא מסוים בסדר היום.",
+    "conflict_needs_details": "כשמסמנים \"יש לי עניין אישי\", חובה לפרט מהו.",
+    "no_vote_with_conflict": "מי שהצהיר/ה על עניין אישי בנושא אינו/ה רשאי/ת להצביע עליו.",
+    "users_username_key": "שם המשתמש הזה כבר קיים במערכת.",
+    "users_email_key": "כתובת הדוא\"ל הזו כבר רשומה למשתמש אחר.",
+    "users_phone_key": "מספר הטלפון הזה כבר רשום למשתמש אחר.",
+}
+# הודעות מטריגרים במסד (קטע מההודעה ← הסבר למשתמש)
+TRIGGER_HE = {
+    "cannot vote before signing": "לא ניתן להצביע לפני חתימה על טופס הצהרת ניגוד העניינים לישיבה.",
+    "append-only": "יומן הפעולות אינו ניתן לשינוי או למחיקה.",
+    "OTP validity": "תוקף קוד האימות אינו יכול לעלות על 5 דקות.",
+}
+COLUMN_HE = {
+    "rsvp": "אישור הגעה", "attended": "נוכחות", "absence_reason": "סיבת היעדרות", "status": "מצב",
+    "mode": "אופן הישיבה", "item_type": "סוג הנושא", "risk_level": "עוצמת הסיכון", "vote": "הצבעה",
+    "materials_deadline_days": "ימי הפצת החומר", "classification": "סיווג", "doc_type": "סוג המסמך",
+    "role": "תפקיד", "minutes_status": "מצב הפרוטוקול", "severity": "חומרה", "channel": "ערוץ",
+    "position": "מספר הנושא", "otp_attempts": "ניסיונות קוד", "failed_attempts": "ניסיונות כניסה",
+    "title": "נושא", "text": "נוסח", "due_date": "מועד", "meeting_at": "מועד הישיבה", "name": "שם",
+}
+REFRESH = " רענן/י את המסך (F5) ונסה/י שוב."
+
+
+def _field(e_fields: dict) -> str:
+    col = e_fields.get("c") or ""
+    if not col:   # אילוץ בדיקה בשם אוטומטי: <טבלה>_<עמודה>_check
+        name = e_fields.get("n") or ""
+        col = next((c for c in COLUMN_HE if name.endswith(f"_{c}_check") or name.endswith(f"_{c}_fkey")), "")
+    return COLUMN_HE.get(col, "")
+
+
+def _friendly(err: Exception) -> UserError:
+    """מתרגם שגיאת מסד להודעה ברורה בעברית: מה קרה ומה לעשות."""
+    f = err.args[0] if err.args and isinstance(err.args[0], dict) else {}
+    code, msg, constraint = f.get("C", ""), f.get("M", str(err)), f.get("n", "")
+    technical = f"{code} {constraint} {msg}".strip()
+    field = _field(f)
+    if constraint in CONSTRAINT_HE:
+        return UserError(CONSTRAINT_HE[constraint], technical)
+    for part, text in TRIGGER_HE.items():
+        if part in msg:
+            return UserError(text, technical)
+    if code == "23514":   # ערך שאינו מהערכים המותרים
+        return UserError(f"הערך שנבחר{' בשדה ' + field if field else ''} אינו מהערכים המותרים.", technical)
+    if code == "23502":   # שדה חובה ריק
+        return UserError(f"חסר שדה חובה{': ' + field if field else ''}.", technical)
+    if code == "23505":   # כפילות
+        return UserError("הרשומה הזו כבר קיימת במערכת, אולי משתמש/ת אחר/ת שמר/ה אותה זה עתה." + REFRESH, technical)
+    if code == "23503":   # הפניה לרשומה שאינה קיימת
+        return UserError(f"הפריט שנבחר{' (' + field + ')' if field else ''} כבר לא קיים: "
+                         "ייתכן שמשתמש/ת אחר/ת מחק/ה או שינה אותו בינתיים." + REFRESH, technical)
+    if code in ("22P02", "22003", "22007", "22008", "22001", "22023"):   # סוג נתון שאינו מתאים
+        return UserError(f"הערך שהוזן{' בשדה ' + field if field else ''} אינו מתאים לסוג השדה "
+                         "(למשל טקסט במקום מספר, תאריך לא תקין, או טקסט ארוך מדי).", technical)
+    if code in ("40001", "40P01", "55P03"):   # התנגשות עם פעולה של משתמש אחר
+        return UserError("משתמש/ת אחר/ת עדכן/ה את אותו מידע באותו רגע. השינוי שלך לא נשמר." + REFRESH, technical)
+    if code == "42501":   # אין הרשאה במסד
+        return UserError("אין לך הרשאה לפעולה הזו.", technical)
+    return UserError("הפעולה לא הושלמה בגלל תקלה במסד הנתונים. הפרטים נשמרו לצוות התמיכה.", technical)
+
+
 def query(sql: str, **params) -> list[dict]:
-    """מריץ שאילתה ומחזיר רשימת שורות כ-dict. מתחבר מחדש אם החיבור נפל."""
+    """מריץ שאילתה ומחזיר רשימת שורות כ-dict. מתחבר מחדש אם החיבור נפל.
+    כל שגיאה מתורגמת ל-UserError עם הודעה ברורה בעברית."""
     shared = _shared()
     with shared["lock"]:
         for attempt in (1, 2):
@@ -58,10 +137,13 @@ def query(sql: str, **params) -> list[dict]:
                 rows = conn.run(sql, **params)
                 cols = [c["name"] for c in (conn.columns or [])]
                 return [dict(zip(cols, r)) for r in rows] if cols and rows else []
-            except (pg8000.exceptions.InterfaceError, OSError, ConnectionError):
+            except pg8000.exceptions.DatabaseError as e:
+                raise _friendly(e) from e
+            except (pg8000.exceptions.InterfaceError, OSError, ConnectionError) as e:
                 shared["conn"] = None
                 if attempt == 2:
-                    raise
+                    raise UserError("אין כרגע חיבור למסד הנתונים. נסה/י שוב בעוד דקה, ואם זה נמשך פנה/י "
+                                    "למנהל/ת מערכות המידע.", f"{type(e).__name__}: {e}") from e
 
 
 def one(sql: str, **params) -> dict | None:
