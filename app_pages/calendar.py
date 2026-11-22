@@ -233,7 +233,10 @@ with tab_next:
                                 st.error(err)
 
             # ---- טופס הצהרת ניגוד עניינים
-            if m["status"] == "proposed":
+            if m["status"] == "proposed":   # הטופס נחתם על נושאים בישיבה מסוימת, ולכן רק אחרי שהמועד נקבע
+                if auth.can(user, "sign_declaration"):
+                    st.caption(":material/info: טופס הצהרת ניגוד העניינים ייפתח לחתימה אחרי שהמועד ייקבע "
+                               "וסדר היום יהיה סופי.")
                 continue
             if not auth.can(user, "sign_declaration"):   # רק מי שיש לו/ה הרשאת חתימה בטבלת ההרשאות
                 continue
