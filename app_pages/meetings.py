@@ -290,6 +290,62 @@ with tab_agenda:
                         st.toast("הנושא נוסף לסדר היום.", icon=":material/check_circle:")
                         st.rerun()
 
+    # ---- הזמנת יועץ/ת חיצוני/ת לנושא מסוים: הרשאה אישית לנושא אחד, שפגה אוטומטית
+    if can_manage and items:
+        grants = db.query(
+            "SELECT p.id, u.name, u.job_title, ai.position, ai.title, p.expires_at, "
+            "(p.expires_at IS NULL OR p.expires_at > now()) AS active, r.declared_at, r.has_conflict "
+            "FROM permissions p JOIN users u ON u.id = p.user_id JOIN agenda_items ai ON ai.id = p.agenda_item_id "
+            "LEFT JOIN item_responses r ON r.agenda_item_id = ai.id AND r.user_id = u.id "
+            "WHERE p.action = 'advise_item' AND ai.meeting_id = :m ORDER BY ai.position", m=meeting_id)
+        with st.expander(f"יועצים חיצוניים ({sum(g['active'] for g in grants)} פעילים)", icon=":material/badge:"):
+            st.caption("יועץ/ת חיצוני/ת (שמאי, רואה חשבון, יועץ משפטי חיצוני) רואה **רק את הנושא שהוזמן/ה אליו**, "
+                       "רק עד מועד התפוגה, ורק אחרי הצהרת ניגוד עניינים והתחייבות לסודיות בחתימה עם קוד.")
+            if grants:
+                ui.table([{"who": g["name"] + (f" ({g['job_title']})" if g["job_title"] else ""),
+                           "item": f"{g['position']}. {g['title']}", "until": ui.fmt_date(g["expires_at"]),
+                           "decl": "ממתין לחתימה" if not g["declared_at"]
+                           else ("עניין אישי" if g["has_conflict"] else "נחתם"),
+                           "status": "בתוקף" if g["active"] else "פג"} for g in grants],
+                         {"who": "יועץ/ת", "item": "נושא", "until": "בתוקף עד", "decl": "הצהרה", "status": "מצב"})
+                for g in grants:
+                    if g["active"] and st.button(f"ביטול הגישה של {g['name']} לנושא {g['position']}",
+                                                 key=f"revoke_{g['id']}", type="tertiary", icon=":material/block:"):
+                        db.execute("UPDATE permissions SET expires_at = now() WHERE id = :i", i=g["id"])
+                        db.audit(uid, "advisor_revoked", "agenda_item", None, f"{g['name']} | נושא {g['position']}")
+                        st.rerun()
+            advisors = db.query("SELECT id, name, job_title FROM users WHERE role = 'advisor' AND active ORDER BY name")
+            if not advisors:
+                st.caption("אין יועצים רשומים במערכת. מנהל/ת מערכות המידע פותח/ת משתמש בתפקיד \"יועץ/ת חיצוני/ת\".")
+            elif m["status"] in ("proposed", "scheduled"):
+                with st.form(f"invite_advisor_{meeting_id}", border=False):
+                    c1, c2, c3 = st.columns([2, 3, 2])
+                    adv = c1.selectbox("יועץ/ת", [a["id"] for a in advisors], format_func=lambda i: next(
+                        a["name"] + (f" ({a['job_title']})" if a["job_title"] else "") for a in advisors if a["id"] == i))
+                    item_pick = c2.selectbox("לאיזה נושא?", [it["id"] for it in items], format_func=lambda i: next(
+                        f"{it['position']}. {it['title']}" for it in items if it["id"] == i))
+                    until = c3.date_input("הגישה בתוקף עד", ui.local(m["meeting_at"]).date() + timedelta(days=1),
+                                          format="DD/MM/YYYY")
+                    if st.form_submit_button("הזמנה", type="primary", icon=":material/send:"):
+                        expires = datetime.combine(until, time(23, 59), tzinfo=ui.israel_tz())
+                        if expires < datetime.now(timezone.utc):
+                            st.error("מועד התפוגה כבר עבר.")
+                        else:
+                            db.execute(
+                                "INSERT INTO permissions (user_id, action, agenda_item_id, granted_by, expires_at) "
+                                "VALUES (:u, 'advise_item', :i, :g, :e) ON CONFLICT ON CONSTRAINT permission_unique "
+                                "DO UPDATE SET expires_at = EXCLUDED.expires_at, granted_by = EXCLUDED.granted_by, "
+                                "granted_at = now()", u=adv, i=item_pick, g=uid, e=expires)
+                            title = next(it["title"] for it in items if it["id"] == item_pick)
+                            db.execute("INSERT INTO reminders (user_id, rule, severity, message, related_type, related_id, "
+                                       "dedupe_key) VALUES (:u, 'advisor_invited', 'info', :msg, 'agenda_item', :i, :k) "
+                                       "ON CONFLICT (dedupe_key) DO NOTHING", u=adv, i=item_pick,
+                                       msg=f"הוזמנת לנושא \"{title}\" ({m['forum']}, {ui.fmt_date(m['meeting_at'])}).",
+                                       k=f"advisor_invited:{item_pick}:{adv}:{expires.date()}")
+                            db.audit(uid, "advisor_invited", "agenda_item", item_pick, f"יועץ {adv} עד {ui.fmt_date(expires)}")
+                            st.toast("היועץ/ת הוזמן/ה לנושא.", icon=":material/check_circle:")
+                            st.rerun()
+
 # ================================================================ לשונית המסמכים
 with tab_docs:
     docs = db.query(

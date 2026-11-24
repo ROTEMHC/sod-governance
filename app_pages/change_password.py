@@ -9,7 +9,8 @@ user = st.session_state.user
 # שוב טופס ריק, וחושב שההחלפה נכשלה (תקלה D-07, נמצאה בבדיקה ידנית)
 if st.session_state.pop("password_changed", False):
     st.success("הסיסמה הוחלפה בהצלחה. מעכשיו נכנסים עם הסיסמה החדשה.", icon=":material/check_circle:")
-    st.page_link("app_pages/home.py", label="המשך למערכת", icon=":material/arrow_back:")
+    st.page_link("app_pages/advisor.py" if auth.can(st.session_state.user, "advisor_portal") else "app_pages/home.py",
+                 label="המשך למערכת", icon=":material/arrow_back:")
     st.stop()
 
 if user["must_change"]:

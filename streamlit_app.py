@@ -59,17 +59,21 @@ else:
     if "actions" not in state.user:          # משתמש שנכנס לפני שנוספה טעינת ההרשאות
         state.user = auth.load_session_user(state.user["id"])
     u = state.user
-    main_pages = [st.Page("app_pages/home.py", title="המשימות שלי", icon=":material/home:", default=True),
-                  st.Page("app_pages/calendar.py", title="היומן שלי", icon=":material/calendar_month:"),
-                  st.Page("app_pages/meetings.py", title="ישיבות ופרוטוקולים", icon=":material/event_note:")]
-    # כל מסך מוצג רק למי שיש לו הרשאה מתאימה בטבלת permissions
-    if auth.can(u, "submit_request") or auth.can(u, "handle_requests") or auth.can(u, "view_requested_reports"):
-        main_pages.append(st.Page("app_pages/requests.py", title="בקשות לדוחות", icon=":material/request_quote:"))
-    if auth.can(u, "view_dashboard"):
-        main_pages.append(st.Page("app_pages/dashboard.py", title="דשבורד כספי", icon=":material/monitoring:"))
-        main_pages.append(st.Page("app_pages/agent.py", title="היועץ של סוד (AI)", icon=":material/psychology:"))
-    if auth.can(u, "view_audit_log"):
-        main_pages.append(st.Page("app_pages/reports.py", title="דוחות בקרה", icon=":material/summarize:"))
+    if auth.can(u, "advisor_portal"):
+        # יועץ/ת חיצוני/ת: תצוגה רזה. רק הנושאים שהוזמן/ה אליהם, ושום מסך אחר
+        main_pages = [st.Page("app_pages/advisor.py", title="הזימונים שלי", icon=":material/mail:", default=True)]
+    else:
+        main_pages = [st.Page("app_pages/home.py", title="המשימות שלי", icon=":material/home:", default=True),
+                      st.Page("app_pages/calendar.py", title="היומן שלי", icon=":material/calendar_month:"),
+                      st.Page("app_pages/meetings.py", title="ישיבות ופרוטוקולים", icon=":material/event_note:")]
+        # כל מסך מוצג רק למי שיש לו הרשאה מתאימה בטבלת permissions
+        if auth.can(u, "submit_request") or auth.can(u, "handle_requests") or auth.can(u, "view_requested_reports"):
+            main_pages.append(st.Page("app_pages/requests.py", title="בקשות לדוחות", icon=":material/request_quote:"))
+        if auth.can(u, "view_dashboard"):
+            main_pages.append(st.Page("app_pages/dashboard.py", title="דשבורד כספי", icon=":material/monitoring:"))
+            main_pages.append(st.Page("app_pages/agent.py", title="היועץ של סוד (AI)", icon=":material/psychology:"))
+        if auth.can(u, "view_audit_log"):
+            main_pages.append(st.Page("app_pages/reports.py", title="דוחות בקרה", icon=":material/summarize:"))
     password_page = st.Page("app_pages/change_password.py", title="החלפת סיסמה", icon=":material/lock_reset:")
     page = st.navigation(main_pages + [password_page], position="sidebar")   # החלפת סיסמה: מתפריט הפרופיל
     ui.topbar(state.user, logout, password_page)
